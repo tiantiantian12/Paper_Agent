@@ -1,0 +1,68 @@
+# ============================================================ Paper Agent（桌面客户端）
+# 按你的要求：**不排除任何密钥**（私人仓库，config/settings 都直接提交）。
+# 这里只忽略「本机生成、每次跑都不一样」的东西：字节码、缓存、运行时数据、IDE 状态。
+
+# ---------------------------------------------------------------- Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+*_pycache_*
+
+# 打包 / 构建产物
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# ---------------------------------------------------------------- 虚拟环境
+.venv/
+venv/
+env/
+ENV/
+.conda/
+.python-version
+
+# ---------------------------------------------------------------- 测试 / 静态检查缓存
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pytype/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+
+# ---------------------------------------------------------------- 运行时数据（本机生成，会一直变）
+# 里面有：sessions/（会话 JSON）、artifacts/（生成的图 / 视频 / 文档）、
+# attachments/（上传的附件）、workspace/（编程模式的会话工程目录）、
+# avatars/、cache/、aigc/，以及 settings.ini（登录令牌）。
+#
+# 想把这些也一起留档（私人仓库）→ 直接把下面这行 data/ 删掉即可。
+# 只想留体积小的评测材料（如 data/artifacts/_eval/）→ 把这行改成：
+#     data/*
+#     !data/artifacts
+#     data/artifacts/*
+#     !data/artifacts/_eval
+data/
+
+# 运行日志
+*.log
+logs/
+
+# ---------------------------------------------------------------- IDE / 编辑器 / 系统
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ---------------------------------------------------------------- 临时文件（调试脚本等）
+_tmp_*
+_*.tmp

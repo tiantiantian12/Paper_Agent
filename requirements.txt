@@ -1,0 +1,28 @@
+# Paper Agent 运行时依赖
+#
+# 安装（conda 环境示例）:
+#   conda activate pyqt6
+#   pip install -r requirements.txt
+
+PySide6>=6.6,<7.0
+
+# 智能体文档 Skills（Word / PPT / PDF / CSV / Excel 读写与产物生成）
+python-docx>=1.1
+python-pptx>=0.6
+reportlab>=4.0
+openpyxl>=3.1
+pypdf>=4.0
+
+# 以下为可选依赖，当前 UI 阶段未强制使用（Markdown 渲染为内置实现）
+# Markdown>=3.4
+# pygments>=2.17
+
+# 开发/测试（运行 tests/ 下的回归用例需要）
+# pip install pytest
+# python -m pytest
+pytest>=8.0
+
+# 视频：抽帧（首尾帧续接）与把多段拼成长视频都走 ffmpeg。
+# 这个包自带一份 ffmpeg 二进制，免去让用户自己装；装不上也不致命 ——
+# 没有 ffmpeg 时「长视频」只出分段、不合成，并明确告诉用户怎么装。
+imageio-ffmpeg>=0.4
