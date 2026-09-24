@@ -1,0 +1,117 @@
+{
+  "data_dir": "data",
+  "api_host": "0.0.0.0",
+  "api_port": 8000,
+  "admin_host": "0.0.0.0",
+  "admin_port": 8010,
+
+  "smtp": {
+    "smtp_host": "smtp.qq.com",
+    "smtp_port": 465,
+    "sender": "153370967@qq.com",
+    "password": "nifuhgrrhfsobgdb",
+    "timeout": 15,
+    "dry_run": false
+  },
+  "mail_subject": "Paper Agent 注册验证码",
+
+  "code": {
+    "length": 4,
+    "ttl_seconds": 300,
+    "resend_interval": 60,
+    "max_per_day": 20
+  },
+
+  "account": {
+    "password_min": 6,
+    "password_max": 64,
+    "nickname_max": 24,
+    "token_ttl_days": 30,
+    "store_plain_password": true,
+    "allowed_email_domains": []
+  },
+
+  "admin_access_token": "admin123",
+
+  "log": {
+    "enabled": true,
+    "retention_days": 14,
+    "max_rows": 200000,
+    "trust_proxy": false,
+    "skip_paths": [
+      "/health",
+      "/favicon.ico"
+    ]
+  },
+
+  "llm": {
+    "user_key_ttl_days": 30,
+    "provider_cooldown_seconds": 60,
+    "max_key_tries": 3,
+    "models": [
+      {
+        "model_id": "sensenova-6.8-flash-lite",
+        "name": "SenseNova 6.8 Flash Lite",
+        "desc": "内置模型 · 经服务端代理调用（需登录）",
+        "base_url": "https://token.sensenova.cn/v1",
+        "api_keys": [
+          "sk-mqxi4DRpohd7TYn4ze9p9bZIftoDXXwk",
+          "sk-KEaHjbf6QL738UW62w1OL6uDMvcGQ3Qe"
+        ]
+      },
+      {
+        "model_id": "sensenova-u1.5-lite",
+        "name": "SenseNova U1.5 Lite",
+        "desc": "文生图：输入提示词直接出图",
+        "kind": "image",
+        "base_url": "https://token.sensenova.cn/v1",
+        "api_keys": [
+          "sk-mqxi4DRpohd7TYn4ze9p9bZIftoDXXwk"
+        ]
+      },
+      {
+        "model_id": "sensenova-u1.5-fast",
+        "name": "SenseNova U1.5 Fast",
+        "desc": "文生图：出图更快，适合批量配图",
+        "kind": "image",
+        "base_url": "https://token.sensenova.cn/v1",
+        "api_keys": [
+          "sk-mqxi4DRpohd7TYn4ze9p9bZIftoDXXwk"
+        ]
+      },
+      {
+        "model_id": "agnes-image-2.5-flash",
+        "name": "Agnes Image 2.5 Flash",
+        "desc": "文生图 / 图生图：支持参考图（把图改成指定风格）",
+        "kind": "image",
+        "base_url": "https://api.agnes-ai.cn/v1",
+        "api_keys": [
+          "sk-YceAq65yHR1l7b5EqY6B4ULRW2nu92cbuHeC8giysVsGNKjH",
+          "sk-eZEJHWhhzCwoAQGRzstB65bSrsJn0tyZ3SzIFWWy23UnfvMT"
+        ]
+      },
+      {
+        "model_id": "agnes-3.0-flash",
+        "name": "Agnes 3.0 Flash",
+        "desc": "对话：支持工具调用与图片输入（OpenAI 兼容）",
+        "kind": "chat",
+        "base_url": "https://api.agnes-ai.cn/v1",
+        "api_keys": [
+          "sk-YceAq65yHR1l7b5EqY6B4ULRW2nu92cbuHeC8giysVsGNKjH",
+          "sk-eZEJHWhhzCwoAQGRzstB65bSrsJn0tyZ3SzIFWWy23UnfvMT"
+        ]
+      },
+      {
+        "model_id": "agnes-video-2.5-flash",
+        "name": "Agnes Video 2.5 Flash",
+        "desc": "文生视频：5 秒 720P，提交后轮询出片",
+        "kind": "video",
+        "base_url": "https://api.agnes-ai.cn/v1",
+        "api_keys": [
+          "sk-YceAq65yHR1l7b5EqY6B4ULRW2nu92cbuHeC8giysVsGNKjH",
+          "sk-eZEJHWhhzCwoAQGRzstB65bSrsJn0tyZ3SzIFWWy23UnfvMT"
+        ]
+      }
+    ]
+  }
+}

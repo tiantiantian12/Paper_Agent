@@ -1,0 +1,24 @@
+# 用户看板（注册用户 / 内置模型 / 密钥池 / 请求日志），默认 127.0.0.1:8010。
+# 看板能回显账号明文密码、能取供应商密钥明文（复制按钮），所以**只监听本机**：
+#   ssh -L 8010:127.0.0.1:8010 root@服务器IP  →  浏览器开 http://127.0.0.1:8010
+# deploy/install.sh 会把 __APP_DIR__ / __RUN_USER__ 替换掉再装到 /etc/systemd/system/。
+[Unit]
+Description=Paper Agent Server 用户看板 (仅本机)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUN_USER__
+Group=__RUN_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-/etc/paper-agent/paper-agent.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__APP_DIR__/.venv/bin/python __APP_DIR__/run.py --only admin
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

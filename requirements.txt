@@ -1,0 +1,7 @@
+# Paper Agent Server 依赖
+# 安装：pip install -r requirements.txt
+
+fastapi>=0.110,<1.0
+uvicorn>=0.27,<1.0
+pydantic>=2.5,<3.0
+python-multipart>=0.0.9

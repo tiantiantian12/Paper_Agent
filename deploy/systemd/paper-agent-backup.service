@@ -1,0 +1,10 @@
+# 数据备份（SQLite 一致性快照）。由 paper-agent-backup.timer 每天触发。
+# 数据全在 data/paper_agent.db 里（用户 / 模型 / 密钥池 / 请求日志），丢了就只能重建。
+[Unit]
+Description=Paper Agent Server 数据备份
+After=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/paper-agent/paper-agent.env
+ExecStart=__APP_DIR__/deploy/backup.sh

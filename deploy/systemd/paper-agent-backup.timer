@@ -1,0 +1,11 @@
+# 每天 04:30（±10 分钟随机）备份一次；Persistent=true 保证关机错过也会补跑。
+[Unit]
+Description=每天备份 Paper Agent Server 数据
+
+[Timer]
+OnCalendar=*-*-* 04:30:00
+RandomizedDelaySec=600
+Persistent=true
+
+[Install]
+WantedBy=timers.target

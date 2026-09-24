@@ -1,0 +1,29 @@
+# Paper Agent Server 反向代理（Caddy：自动申请 / 续期 Let's Encrypt 证书）
+#
+# deploy/enable-https.sh 会把域名与白名单 IP 替换进来，写到 /etc/caddy/Caddyfile。
+# 手工改完执行：sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+#
+# 为什么用 Caddy 而不是 Nginx：对话是 SSE 长连接，Caddy 默认不做响应缓冲、直接透传；
+# 换成 Nginx 必须自己补 proxy_buffering off; proxy_read_timeout 600s; proxy_http_version 1.1;
+# 少一样就会「回答卡住半天、最后一次性吐出来」或中途 504。
+
+api.__DOMAIN__ {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8000
+}
+
+# >>>ADMIN-BLOCK
+# 看板：页面里有账号明文密码回显、供应商密钥「复制明文」接口，
+# 所以**只放给你自己的出口 IP**（家里的 / 公司的各写一行）。
+# 不想开这个站点就删掉这一整块（# >>>ADMIN-BLOCK 到 # <<<ADMIN-BLOCK），
+# 改走 SSH 隧道：ssh -L 8010:127.0.0.1:8010 root@服务器IP
+admin.__ADMIN_DOMAIN__ {
+	@mine remote_ip __ADMIN_ALLOW_IP__
+	handle @mine {
+		reverse_proxy 127.0.0.1:8010
+	}
+	handle {
+		respond "forbidden" 403
+	}
+}
+# <<<ADMIN-BLOCK

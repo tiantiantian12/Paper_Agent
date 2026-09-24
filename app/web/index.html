@@ -1,0 +1,437 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Paper Agent · 服务端看板</title>
+  <link rel="stylesheet" href="/static/style.css?v=8" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="logo">PA</div>
+      <div>
+        <h1>服务端看板</h1>
+        <p class="sub">注册用户 · 内置模型 · 密钥池 · 请求日志</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <label class="switch">
+        <input type="checkbox" id="autoRefresh" />
+        <span>自动刷新</span>
+      </label>
+      <button class="btn" id="refreshBtn" type="button">刷新</button>
+    </div>
+  </header>
+
+  <main>
+    <nav class="tabs">
+      <button class="tab active" data-tab="users" type="button">注册用户</button>
+      <button class="tab" data-tab="llm" type="button">大模型与密钥</button>
+      <button class="tab" data-tab="logs" type="button">请求日志</button>
+    </nav>
+
+    <section id="viewUsers">
+      <section class="stats" id="stats">
+        <div class="card"><span class="label">注册用户</span><strong id="statUsers">-</strong></div>
+        <div class="card"><span class="label">今日新增</span><strong id="statToday">-</strong></div>
+        <div class="card"><span class="label">今日验证码</span><strong id="statCodes">-</strong></div>
+        <div class="card"><span class="label">在线令牌</span><strong id="statTokens">-</strong></div>
+      </section>
+
+      <section class="toolbar">
+        <input id="search" type="search" placeholder="搜索昵称或邮箱…" autocomplete="off" />
+        <label class="switch">
+          <input type="checkbox" id="showAllPwd" />
+          <span>显示全部密码</span>
+        </label>
+        <span class="count" id="countText">共 0 位用户</span>
+      </section>
+
+      <section class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th class="col-id">ID</th>
+              <th>昵称</th>
+              <th>邮箱</th>
+              <th>账号密码</th>
+              <th class="col-status">状态</th>
+              <th>注册时间</th>
+              <th>最近登录</th>
+              <th class="col-action">操作</th>
+            </tr>
+          </thead>
+          <tbody id="tbody"></tbody>
+        </table>
+        <div class="empty" id="empty" hidden>还没有用户，去桌面端注册一个吧</div>
+      </section>
+    </section>
+
+    <section id="viewLlm" hidden>
+      <section class="stats" id="llmStats">
+        <div class="card"><span class="label">内置模型</span><strong id="llmModels">-</strong></div>
+        <div class="card"><span class="label">用户密钥</span><strong id="llmKeys">-</strong></div>
+        <div class="card"><span class="label">可用密钥</span><strong id="llmActiveKeys">-</strong></div>
+        <div class="card"><span class="label">默认有效期</span><strong id="llmTtl">-</strong></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>模型健康 · 限流</h2>
+          <span class="sub">哪个模型在挨限流（429 越多排得越靠前）、它的密钥池还剩几把能用、
+            有没有钥匙正被冷却。免费档最常卡在视频 / 生图；应急办法是给这个模型再加一把 Key</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th class="col-status">类型</th>
+                <th class="col-status">密钥（可用/总）</th>
+                <th class="col-id">限流（429）</th>
+                <th>最近一次被限流</th>
+                <th>最近一次报错</th>
+              </tr>
+            </thead>
+            <tbody id="mhBody"></tbody>
+          </table>
+          <div class="empty" id="mhEmpty" hidden>还没有内置模型</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>内置模型</h2>
+          <span class="sub">桌面端下拉框里的内置模型：对话与文生图都在这里维护（含密钥池），客户端下次启动 / 登录自动同步</span>
+        </div>
+        <div class="form-row">
+          <input id="mId" type="text" placeholder="模型 ID（如 sensenova-6.8-flash-lite）" />
+          <select id="mKind">
+            <option value="chat">对话模型</option>
+            <option value="image">文生图模型</option>
+            <option value="video">文生视频模型</option>
+          </select>
+          <input id="mName" type="text" placeholder="显示名（桌面端下拉框里的名字）" />
+          <input id="mDesc" type="text" placeholder="备注（桌面端显示在名字下方）" />
+          <input id="mUrl" type="text" placeholder="Base URL（如 https://token.sensenova.cn/v1）" />
+          <button class="btn primary" id="mAdd" type="button">添加模型</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>模型 ID</th>
+                <th class="col-status">类型</th>
+                <th>显示名</th>
+                <th>备注</th>
+                <th>Base URL</th>
+                <th class="col-status">状态</th>
+                <th class="col-status">密钥数</th>
+                <th class="col-action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="modelBody"></tbody>
+          </table>
+          <div class="empty" id="modelEmpty" hidden>还没有内置模型</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>供应商密钥池</h2>
+          <span class="sub">同一模型可配多个 Key，请求轮换使用；命中限流会自动冷却并换下一个。列表只显示打码值，点「复制」取明文</span>
+        </div>
+        <div class="form-row">
+          <select id="pkModel"></select>
+          <input id="pkKey" type="text" placeholder="供应商 API Key" />
+          <input id="pkLabel" type="text" placeholder="备注（可选）" />
+          <button class="btn primary" id="pkAdd" type="button">添加密钥</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-id">ID</th>
+                <th>模型</th>
+                <th>密钥</th>
+                <th>备注</th>
+                <th class="col-status">状态</th>
+                <th>最近使用</th>
+                <th class="col-action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="pkBody"></tbody>
+          </table>
+          <div class="empty" id="pkEmpty" hidden>还没有供应商密钥，添加后桌面端才能用内置模型</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>用户代理密钥</h2>
+          <span class="sub">桌面端调用服务端代理时携带；可设有效期、停用或删除，未携带正确密钥的请求一律拒绝</span>
+        </div>
+        <div class="form-row">
+          <input id="ukUser" type="text" placeholder="用户 ID（见「注册用户」列表）" />
+          <input id="ukLabel" type="text" placeholder="备注（可选）" />
+          <input id="ukDays" type="text" placeholder="有效天数，留空用默认，0 表示不过期" />
+          <button class="btn primary" id="ukAdd" type="button">生成密钥</button>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th class="col-id">ID</th>
+                <th>用户</th>
+                <th>密钥</th>
+                <th>备注</th>
+                <th class="col-status">状态</th>
+                <th>到期时间</th>
+                <th>最近使用</th>
+                <th class="col-action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="ukBody"></tbody>
+          </table>
+          <div class="empty" id="ukEmpty" hidden>还没有用户密钥</div>
+        </div>
+      </section>
+    </section>
+
+    <section id="viewLogs" hidden>
+      <section class="stats" id="logStats">
+        <div class="card"><span class="label">请求数</span><strong id="logTotal">-</strong></div>
+        <div class="card"><span class="label">异常请求</span><strong id="logErrors">-</strong></div>
+        <div class="card"><span class="label">独立 IP</span><strong id="logIps">-</strong></div>
+        <div class="card"><span class="label">独立账号</span><strong id="logUsers">-</strong></div>
+        <div class="card"><span class="label">被限流（429）</span><strong id="logLimited">-</strong></div>
+        <div class="card"><span class="label">今日请求</span><strong id="logToday">-</strong></div>
+      </section>
+
+      <p class="banner" id="logDropped" hidden></p>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>来源排行</h2>
+          <span class="sub">按 IP 聚合：谁打得最多、有没有账号。点「只看它」筛出这个来源的全部请求</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>来源 IP</th>
+                <th class="col-id">次数</th>
+                <th class="col-status">异常</th>
+                <th>账号</th>
+                <th>最近一次</th>
+                <th class="col-action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="logIpBody"></tbody>
+          </table>
+          <div class="empty" id="logIpEmpty" hidden>这个时间窗内还没有请求</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>接口排行</h2>
+          <span class="sub">被猛打的是哪个接口 —— 刷登录、刷模型密钥、刷代理一眼看出来</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>接口</th>
+                <th class="col-id">方法</th>
+                <th class="col-id">次数</th>
+                <th class="col-status">异常</th>
+              </tr>
+            </thead>
+            <tbody id="logPathBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>模型限流</h2>
+          <span class="sub">按模型聚合：哪个模型返回了 429（被供应商限流）、多少次、最后一次是什么时候。
+            限流多的排在最上面，点「只看它」把明细筛到这个模型</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th class="col-id">请求数</th>
+                <th class="col-id">限流（429）</th>
+                <th class="col-id">其他错误</th>
+                <th>最近一次被限流</th>
+                <th class="col-action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="logModelBody"></tbody>
+          </table>
+          <div class="empty" id="logModelEmpty" hidden>这个时间窗内还没有模型请求</div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>请求明细</h2>
+          <span class="sub">时间 · 来源 · 账号 · 具体信息 · 结果（每条都在库里有备份，可导出 CSV 留证）</span>
+        </div>
+        <div class="toolbar">
+          <input id="logSearch" type="search" placeholder="搜 IP / 昵称 / 邮箱 / 路径 / 详情…" autocomplete="off" />
+          <select id="logStatus">
+            <option value="">全部状态</option>
+            <option value="error">只看异常（4xx / 5xx）</option>
+            <option value="401">401 未授权</option>
+            <option value="403">403 无权限</option>
+            <option value="429">429 被限流</option>
+            <option value="5xx">5xx 服务端错误</option>
+          </select>
+          <select id="logHours">
+            <option value="1">最近 1 小时</option>
+            <option value="24" selected>最近 24 小时</option>
+            <option value="168">最近 7 天</option>
+            <option value="0">全部时间</option>
+          </select>
+          <select id="logService">
+            <option value="">全部服务</option>
+            <option value="api">主服务</option>
+            <option value="admin">看板</option>
+          </select>
+          <input id="logModel" type="search" placeholder="只看某个模型…" autocomplete="off" />
+          <button class="btn" id="logExport" type="button">导出 CSV</button>
+          <button class="btn" id="logClear" type="button">清空日志</button>
+        </div>
+        <div class="toolbar pager">
+          <span class="muted" id="logCount">共 0 条</span>
+          <span class="spacer"></span>
+          <select id="logLimit">
+            <option value="50">每页 50 条</option>
+            <option value="100">每页 100 条</option>
+            <option value="200" selected>每页 200 条</option>
+            <option value="500">每页 500 条</option>
+          </select>
+          <button class="btn" id="logPrev" type="button">上一页</button>
+          <span class="muted" id="logPage">第 1 / 1 页</span>
+          <button class="btn" id="logNext" type="button">下一页</button>
+        </div>
+        <p class="banner" id="logFilter" hidden></p>
+        <div class="table-wrap">
+          <table class="logs-table">
+            <thead>
+              <tr>
+                <th class="col-time">时间</th>
+                <th>来源</th>
+                <th>账号</th>
+                <th>请求</th>
+                <th>模型</th>
+                <th class="col-status">状态</th>
+                <th class="col-detail">具体信息</th>
+                <th>凭证 / 来源</th>
+                <th class="col-action">操作</th>
+              </tr>
+            </thead>
+            <tbody id="logBody"></tbody>
+          </table>
+          <div class="empty" id="logEmpty" hidden>没有符合条件的请求</div>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <div class="modal-mask" id="tokenModal" hidden>
+    <div class="modal">
+      <h2>需要管理口令</h2>
+      <p class="sub">服务端设置了 admin_access_token，请输入后查看数据。</p>
+      <input id="tokenInput" type="password" placeholder="管理口令" autocomplete="off" />
+      <p class="error" id="tokenError" hidden></p>
+      <p class="sub" style="margin-top:10px">
+        口令写在服务端 config.json 的 admin_access_token；把该项置空可免口令。
+      </p>
+      <div class="modal-actions">
+        <button class="btn" id="tokenCancel" type="button">取消</button>
+        <button class="btn primary" id="tokenSubmit" type="button">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="modelModal" hidden>
+    <div class="modal modal-form">
+      <h2>编辑内置模型</h2>
+      <p class="sub">显示名与备注会下发给桌面端（模型下拉框里就显示这两行）</p>
+
+      <label class="field">
+        <span>模型 ID</span>
+        <input id="mmId" type="text" readonly />
+      </label>
+      <label class="field">
+        <span>类型</span>
+        <select id="mmKind">
+          <option value="chat">对话模型（走 /chat/completions）</option>
+          <option value="image">文生图模型（走 /images/generations）</option>
+          <option value="video">文生视频模型（走 /videos + 轮询）</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>显示名</span>
+        <input id="mmName" type="text" placeholder="桌面端下拉框里的名字" />
+      </label>
+      <label class="field">
+        <span>备注</span>
+        <input id="mmDesc" type="text" placeholder="显示在名字下方，可以留空" />
+      </label>
+      <label class="field">
+        <span>Base URL</span>
+        <input id="mmUrl" type="text" placeholder="https://api.example.com/v1" />
+      </label>
+      <label class="switch">
+        <input type="checkbox" id="mmEnabled" />
+        <span>启用（停用后桌面端看不到这个模型）</span>
+      </label>
+
+      <p class="error" id="mmError" hidden></p>
+      <div class="modal-actions">
+        <button class="btn" id="mmCancel" type="button">取消</button>
+        <button class="btn primary" id="mmSave" type="button">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-mask" id="renewModal" hidden>
+    <div class="modal modal-form">
+      <h2>续期用户密钥</h2>
+      <p class="sub" id="rnWho"></p>
+
+      <label class="field">
+        <span>延长天数</span>
+        <input id="rnDays" type="text" placeholder="填 0 表示永不过期" />
+      </label>
+      <div class="chips">
+        <button class="ghost" type="button" data-days="30">30 天</button>
+        <button class="ghost" type="button" data-days="90">90 天</button>
+        <button class="ghost" type="button" data-days="365">1 年</button>
+        <button class="ghost" type="button" data-days="0">不过期</button>
+      </div>
+
+      <p class="sub">从今天算起重新计时；已有到期时间会被覆盖。</p>
+      <p class="error" id="rnError" hidden></p>
+      <div class="modal-actions">
+        <button class="btn" id="rnCancel" type="button">取消</button>
+        <button class="btn primary" id="rnSave" type="button">确定续期</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+
+  <script src="/static/main.js?v=8"></script>
+  <script src="/static/keys.js?v=8"></script>
+  <script src="/static/logs.js?v=8"></script>
+</body>
+</html>

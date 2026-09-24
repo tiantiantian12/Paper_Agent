@@ -1,0 +1,293 @@
+:root {
+  --bg: #ffffff;
+  --bg-subtle: #fafaf9;
+  --bg-hover: #f4f4f2;
+  --border: #e5e5e1;
+  --border-strong: #d3d3cd;
+  --text: #1b1b19;
+  --text-2: #5f5f58;
+  --text-3: #8e8e86;
+  --accent: #1b1b19;
+  --accent-text: #ffffff;
+  --radius: 10px;
+  --radius-sm: 8px;
+}
+
+* { box-sizing: border-box; }
+
+/* hidden 属性必须压过下面 display: grid/flex 之类的类选择器，否则弹窗关不掉 */
+[hidden] { display: none !important; }
+
+body {
+  margin: 0;
+  background: var(--bg-subtle);
+  color: var(--text);
+  font-family: "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  font-size: 14px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 24px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.topbar-left { display: flex; align-items: center; gap: 12px; }
+.logo {
+  width: 34px; height: 34px;
+  display: grid; place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: var(--accent-text);
+  font-size: 12px; font-weight: 600; letter-spacing: .5px;
+}
+h1 { margin: 0; font-size: 16px; font-weight: 600; }
+.sub { margin: 2px 0 0; color: var(--text-3); font-size: 12px; }
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+
+/* 宽屏就放开写：请求明细有 9 列，容器太窄会逼着整张表横向滚动 */
+main { max-width: 1440px; margin: 0 auto; padding: 20px 24px 48px; }
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.card {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.card .label { color: var(--text-3); font-size: 12px; }
+.card strong { font-size: 22px; font-weight: 600; }
+
+.toolbar {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 12px; flex-wrap: wrap;
+}
+input[type="search"], input[type="password"], input[type="text"] {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 13px;
+  outline: none;
+  min-width: 240px;
+}
+input:focus { border-color: var(--border-strong); }
+
+.btn {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.btn:hover { background: var(--bg-hover); }
+.btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+.switch { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; cursor: pointer; }
+.count { color: var(--text-3); font-size: 12px; margin-left: auto; }
+
+.table-wrap {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  /* 列多了就**横向滚动**，不要把「2026-09-23 03:13:52」挤成一列字 */
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+table { width: 100%; border-collapse: collapse; }
+th, td {
+  text-align: left;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  vertical-align: middle;
+}
+th { color: var(--text-3); font-weight: 500; font-size: 12px; background: var(--bg-subtle); }
+/* 表头一律单行（「密钥（可用/总）」这种不该折） */
+th { white-space: nowrap; }
+
+/* 请求明细：9 列，列宽很挤 —— 除「具体信息」外全部单行显示，
+   不够宽就让整张表横向滚动（上面 .table-wrap 已经允许）。 */
+.logs-table { min-width: 1040px; }
+.logs-table th, .logs-table td { white-space: nowrap; }
+.logs-table .col-time { width: 170px; }
+/* 正文里不再重复模型名（见 logs.js 的 tidyDetail），所以这一格窄一些也放得下 */
+.logs-table .col-detail { white-space: normal; min-width: 180px; max-width: 320px; }
+
+/* 分页条：左侧「共 N 条」，右侧翻页控件 */
+.pager { margin-bottom: 12px; }
+.pager .spacer { flex: 1; }
+.pager .btn:disabled { opacity: .45; cursor: default; }
+tbody tr:last-child td { border-bottom: none; }
+tbody tr:hover { background: var(--bg-hover); }
+.col-id { width: 60px; color: var(--text-3); }
+.col-status { width: 74px; }
+
+.user { display: flex; align-items: center; gap: 8px; }
+.avatar {
+  width: 26px; height: 26px; border-radius: 50%;
+  display: grid; place-items: center;
+  background: var(--text); color: #fff;
+  font-size: 11px; font-weight: 600;
+}
+.pwd { display: inline-flex; align-items: center; gap: 6px; }
+.pwd code {
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  letter-spacing: .5px;
+}
+.ghost {
+  border: none; background: transparent; color: var(--text-3);
+  cursor: pointer; font-size: 12px; padding: 2px 4px; border-radius: 4px;
+}
+.ghost:hover { background: var(--bg-hover); color: var(--text); }
+.badge {
+  display: inline-block; padding: 1px 7px; border-radius: 4px;
+  font-size: 11px; background: var(--bg-hover); color: var(--text-2);
+  border: 1px solid var(--border);
+}
+.muted { color: var(--text-3); }
+
+/* 表格里「点一下就筛这个模型」的模型名：看着像链接，不是一颗实心按钮 */
+button.link {
+  padding: 0; border: 0; background: none; color: var(--text-1);
+  font: inherit; text-align: left; cursor: pointer;
+  border-bottom: 1px dashed var(--border);
+}
+button.link:hover { color: var(--accent, #8a6d3b); border-bottom-style: solid; }
+
+.empty { padding: 48px 0; text-align: center; color: var(--text-3); font-size: 13px; }
+
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(24,24,22,.45);
+  display: grid; place-items: center; z-index: 20;
+}
+.modal {
+  width: 340px; background: var(--bg); border-radius: var(--radius);
+  border: 1px solid var(--border); padding: 20px;
+}
+.modal h2 { margin: 0 0 6px; font-size: 15px; }
+.modal input { width: 100%; margin-top: 14px; min-width: 0; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.error { color: #c0392b; font-size: 12px; margin-top: 8px; }
+
+/* 表单型弹框：一行一个字段（标签在上，输入框在下） */
+.modal-form { width: 440px; }
+.modal-form .field { display: block; margin-top: 12px; }
+.modal-form .field > span {
+  display: block; margin-bottom: 4px;
+  color: var(--text-3); font-size: 12px;
+}
+.modal-form .field input,
+.modal-form .field select {
+  margin-top: 0;
+  width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 13px;
+  outline: none;
+}
+.modal-form .field select:focus { border-color: var(--border-strong); }
+.modal-form .field > span { margin-bottom: 4px; }
+.modal-form .field input[readonly] {
+  background: var(--bg-hover); color: var(--text-3); cursor: default;
+}
+.modal-form .field input:focus { border-color: var(--border-strong); }
+.modal-form .switch { margin-top: 14px; }
+/* 上面的 .modal input 会把宽度撑满，勾选框要单独收回来 */
+.modal-form .switch input { width: auto; margin-top: 0; }
+.modal-form .chips { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.modal-form .chips .ghost { padding: 4px 10px; font-size: 12px; }
+.modal-form .sub { margin: 10px 0 0; }
+.modal-form .error { margin-top: 10px; }
+
+.toast {
+  position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%);
+  background: var(--text); color: #fff; padding: 8px 14px;
+  border-radius: 6px; font-size: 13px; z-index: 30;
+}
+
+/* ------------------------------ 分页签 ------------------------------ */
+.tabs {
+  display: flex; gap: 6px; margin-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  border: none; background: transparent; color: var(--text-3);
+  font-size: 13px; padding: 8px 14px; cursor: pointer;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 600; }
+
+/* ------------------------------ 面板 ------------------------------ */
+.panel {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.panel-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+.panel-head h2 { margin: 0; font-size: 14px; font-weight: 600; }
+.panel .table-wrap { border-radius: var(--radius-sm); }
+
+.form-row {
+  display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px;
+}
+.form-row input[type="text"], .form-row select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  font-size: 13px;
+  outline: none;
+  min-width: 200px;
+  flex: 1 1 200px;
+}
+.form-row input:focus, .form-row select:focus { border-color: var(--border-strong); }
+.form-row .btn { flex: 0 0 auto; }
+
+.col-action { width: 190px; }
+.actions { display: inline-flex; gap: 4px; flex-wrap: wrap; }
+code.key {
+  font-family: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+.badge.on { background: #e8f5ec; color: #1a7f4b; border-color: #bfe3cb; }
+.badge.off { background: var(--bg-hover); color: var(--text-3); }
+.badge.warn { background: #fdf3e3; color: #b25e09; border-color: #f0dcb8; }
+.badge.bad { background: #fdeceb; color: #b3261e; border-color: #f2c9c5; }
+
+/* 提示条：请求日志页签里的「丢了 N 条」「正在按某来源筛选」 */
+.banner {
+  margin: 0 0 12px;
+  padding: 9px 12px;
+  border: 1px solid #f0dcb8;
+  border-radius: var(--radius-sm);
+  background: #fdf3e3;
+  color: #8a5a10;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.banner .ghost { color: #8a5a10; text-decoration: underline; }
+.banner .ghost:hover { background: transparent; color: var(--text); }
+

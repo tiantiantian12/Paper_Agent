@@ -1,0 +1,29 @@
+# 桌面端要连的主服务（注册 / 登录 / 验证码 / 大模型代理）。
+# deploy/install.sh 会把 __APP_DIR__ / __RUN_USER__ 替换掉再装到 /etc/systemd/system/。
+#
+# 这里刻意用项目的 run.py 启动（而不是直接写 uvicorn 参数）：
+# 监听地址只由 paper-agent.env 的 API_HOST / API_PORT 决定，一处生效 ——
+#   阶段一：API_HOST=0.0.0.0（防火墙只对你自己的公网 IP 放通 8000）
+#   阶段二：API_HOST=127.0.0.1（Caddy 对外提供 HTTPS，8000 不再对外）
+[Unit]
+Description=Paper Agent Server API (账号 + 大模型代理)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__RUN_USER__
+Group=__RUN_USER__
+WorkingDirectory=__APP_DIR__
+EnvironmentFile=-/etc/paper-agent/paper-agent.env
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__APP_DIR__/.venv/bin/python __APP_DIR__/run.py --only api
+Restart=always
+RestartSec=3
+# 停止时给流式请求留出收尾时间
+TimeoutStopSec=15
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
