@@ -20,7 +20,6 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from paper_agent.core.constants import ARTIFACTS_DIR
 from paper_agent.services import session_artifacts
 from paper_agent.services.background_assets import is_cancelled
 from paper_agent.services.video_client import (
@@ -75,13 +74,13 @@ def session_paths(
     session_files: Sequence[dict] | None,
     extra_dirs: Sequence[str] | None = None,
 ) -> list[str]:
-    """可用于解析的本地文件：本会话清单 + 本会话产物目录 / 根目录旧文件 + 会话工程目录。
+    """可用于解析的本地文件：本会话清单 + 本会话工作区 + 会话工程目录。
 
     **不进别的会话目录** —— 视频名字都长成 ``视频-20260923-144501.mp4``，
     一起扫就会把别的会话刚生成的片子当成自己的（用户报的「串文件」）。
     """
     return [
-        *session_artifacts.candidates(session_files, base=ARTIFACTS_DIR),
+        *session_artifacts.candidates(session_files),
         *session_artifacts.extra_paths(extra_dirs),
     ]
 
@@ -94,7 +93,7 @@ def available_names(
 ) -> list[str]:
     """本会话里**确实存在**的、符合后缀的文件名（报错时列给模型看）。"""
     return session_artifacts.available_names(
-        session_files, suffixes, extra_dirs, base=ARTIFACTS_DIR, limit=limit
+        session_files, suffixes, extra_dirs, limit=limit
     )
 
 
@@ -104,9 +103,7 @@ def name_hint(
     extra_dirs: Sequence[str] | None = None,
 ) -> str:
     """报错时附一句「本会话现在能用的文件：a.png、b.png…」（见 session_artifacts）。"""
-    return session_artifacts.name_hint(
-        session_files, suffixes, extra_dirs, base=ARTIFACTS_DIR
-    )
+    return session_artifacts.name_hint(session_files, suffixes, extra_dirs)
 
 
 def resolve_asset(

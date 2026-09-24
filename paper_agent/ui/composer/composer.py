@@ -58,6 +58,9 @@ class Composer(QWidget):
         self._streaming = False
         self._compact = False
         self._hint_full = ""
+        # 上传的文件落到**当前会话**工作区的 upload 目录（主窗口切会话时更新）。
+        # 没设置就退回附件目录 —— 附件会不会凭空消失比放在哪更重要。
+        self._upload_dir: Path | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 6, 24, 16)
@@ -162,12 +165,16 @@ class Composer(QWidget):
         return row
 
     # ------------------------------------------------------------------ 附件
+    def set_upload_dir(self, directory: Path | str | None) -> None:
+        """切换当前会话：之后上传的文件进这个目录（会话工作区的 ``upload``）。"""
+        self._upload_dir = Path(directory) if directory else None
+
     def add_files(self, paths: list[str]) -> None:
         for path in paths:
             if file_size(path) > MAX_ATTACHMENT_SIZE_MB * 1024 * 1024:
                 signals.toast_requested.emit(f"文件过大（超过 {MAX_ATTACHMENT_SIZE_MB} MB）：{path}")
                 continue
-            stored = import_file(path)
+            stored = import_file(path, self._upload_dir)
             self.attachment_bar.add(
                 Attachment(
                     name=Path(stored).name,
@@ -180,7 +187,7 @@ class Composer(QWidget):
         self._sync_send_state()
 
     def _on_image_pasted(self, image: QImage) -> None:
-        path = save_pasted_image(image)
+        path = save_pasted_image(image, self._upload_dir)
         if not path:
             signals.toast_requested.emit("图片读取失败")
             return

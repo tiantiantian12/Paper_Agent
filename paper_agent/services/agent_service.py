@@ -35,6 +35,24 @@ from paper_agent.services.video_client import VideoClient, VideoGenerationError
 from paper_agent.services.mock_engine import build_reply, build_thinking
 from paper_agent.services.openai_client import OpenAICompatClient
 
+# ---------------------------------------------------------------- 文件名硬规则
+# 2026-09-24 的真实事故：模型每轮都照「视频-20260924-HHMMSS.mp4」的格式**预测**一个
+# 文件名写进正文，跟工具真正返回的名字对不上（真实是 111902，正文写 032357）。后果：
+#   * 它自己以为「上一条没真调工具」，于是同一段反复重拍，白等一两分钟、白花额度；
+#   * 用户拿着一个不存在的文件名去找文件；
+#   * 让它把已有视频合成时，它回「工作区里没有任何视频文件，之前那些名字都是我编的」。
+# 文件名里带的是**生成时刻**，模型不可能预知 —— 这条写进两套系统提示（文档 / 编程）。
+FILE_NAME_RULE = (
+    "\n**文件名一律不许猜**：生成出来的名字里带「生成时刻」的时间戳，你无法预知，所以：\n"
+    "① 结果还没返回时**不要**先写文件名，也不要写「接下来会生成 视频-xxxx.mp4」这类推测；\n"
+    "② 引用已有文件时，只能用**系统提示里的文件清单**或**工具返回原文**里的名字 —— "
+    "照抄，不要改写、不要凭印象拼一个；\n"
+    "③ 想知道本会话已经生成了什么，调用 `list_artifacts`（工程文件用 `list_files`）；"
+    "**不要**凭记忆回答「有哪些文件」，更不要断言「什么都没有」；\n"
+    "④ 只有工具真的返回成功才能说「已生成」；一时写不出准确文件名就用描述性说法"
+    "（如「刚才那两段视频」）—— **宁可不说，也不要编一个像模像样的名字**。"
+)
+
 SYSTEM_PROMPT = (
     "你是「Paper Agent」——一位严谨的毕业论文写作助手。"
     "你擅长选题分析、章节大纲设计、文献综述梳理、正文写作与学术润色，"
@@ -76,6 +94,7 @@ SYSTEM_PROMPT = (
     "系统任务：需要扫描磁盘、统计大文件、查找或清理临时/缓存文件时，"
     "调用 execute_python 编写并执行 Python 代码；删除操作仅对临时目录、"
     "浏览器缓存、回收站等白名单生效，其它位置一律拒绝，不要尝试绕过。"
+    + FILE_NAME_RULE
 )
 
 # 编程模式：把角色从「论文助手」切到「工程助手」
@@ -105,15 +124,43 @@ CODE_SYSTEM_PROMPT = (
     "（除非用户明确要的是数据图表）。"
     "**只有工具真的返回成功才能说「已生成」**：不要只写一段出图过程就宣布完成，"
     "也不要凭空编文件名或本地路径 —— 编出来的路径用户打不开，等于没生成。\n"
-    "所有读写与命令执行都发生在**工程目录**内（默认在应用数据目录下的 workspace，"
-    "可用环境变量 PAPERAGENT_CODE_ROOT 指定已有项目），目录之外的写入会被拒绝。\n"
+    "所有读写与命令执行都发生在**工程目录**内（默认在应用数据目录下的 "
+    "``workspace/<会话 id>/generated``：你写的代码与生成的视频 / 文档都在这一层，"
+    "用户上传的在旁边的 ``upload``；可用环境变量 PAPERAGENT_CODE_ROOT 指定已有项目），"
+    "目录之外的写入会被拒绝。\n"
     "关于浏览器：你自己运行在无 GUI 的工具环境里，确实打不开浏览器，"
     "但也**不需要**打开 —— start_service 会由应用代开，你只要把访问地址写成裸链接"
     "（不要放进反引号或代码块）写进回复里，用户点一下就能进。"
     "不要在回复里说「请你自己在浏览器打开」或「我无法打开浏览器」。\n"
     "回答要求：用 Markdown；改了什么、为什么改、怎么验证的要讲清楚；"
     "贴代码时用带语言标注的代码块；不确定的地方先说明假设，不要编造 API。"
+    + FILE_NAME_RULE
 )
+
+# 会话工作区布局（两种模式共用同一份目录，见 services/session_workspace.py）。
+# 以前产物在 data/artifacts、附件在 data/attachments、编程模式的工程在 workspace/<会话 id>，
+# 三处各管各的 —— 模型在工程目录里找不到刚生成的视频，于是断言「工作区里没有任何视频文件」
+# （2026-09-24 真实事故）。把布局写进系统提示，它才知道该去哪找。
+WORKSPACE_LAYOUT_TEMPLATE = (
+    "**本会话工作区**（上传与生成都在这同一棵树里，编程 / 文档模式共用）：\n"
+    "根目录：{root}\n"
+    "- `{upload}/` —— 用户上传 / 粘贴的文件\n"
+    "- `{generated}/` —— 你生成的配图 / 视频 / Word / PPT / 下载\n"
+    "引用已有文件时写**文件名**就行（系统会在这两个目录里找）；"
+    "要在代码或命令里写路径，就写成 `generated/文件名`、`upload/文件名`。"
+)
+
+
+def workspace_layout_hint(root: str) -> str:
+    """工作区布局说明（随每轮请求注入，路径按会话而异）。"""
+    from paper_agent.services import session_workspace
+
+    return WORKSPACE_LAYOUT_TEMPLATE.format(
+        root=root,
+        upload=session_workspace.UPLOAD_DIR_NAME,
+        generated=session_workspace.GENERATED_DIR_NAME,
+    )
+
 
 # 输入区「深度写作」开关：作为一条 system 消息注入本轮请求
 DEEP_WRITING_HINT = (
@@ -189,6 +236,7 @@ def build_chat_messages(
     mode: str = "doc",
     code_files: list[str] | None = None,
     code_root: str = "",
+    workspace_root: str = "",
 ) -> list[dict]:
     """组装发送给模型的消息列表（图片走多模态 content）。
 
@@ -203,16 +251,38 @@ def build_chat_messages(
             注入后模型不用先调 ``list_files`` 也知道这里有什么，
             并且**默认就认这些文件**（用户没给路径时不会跑到别处去找）。
         code_root: 工程目录绝对路径，随清单一并说明，方便模型拼相对路径。
+        workspace_root: 会话工作区根目录（``upload`` / ``generated`` 在哪），
+            两种模式都注入 —— 模型按名字找文件时才知道该看哪两个目录。
     """
     prompt = CODE_SYSTEM_PROMPT if mode == "code" else SYSTEM_PROMPT
     messages: list[dict] = [{"role": "system", "content": prompt}]
 
-    if workspace and mode != "code":
+    if workspace_root:
+        messages.append(
+            {"role": "system", "content": workspace_layout_hint(workspace_root)}
+        )
+
+    if workspace:
         from paper_agent.services.paper_outline import format_workspace_file
 
-        lines = ["本会话工作区已有以下文件（可直接用 read_document 按路径读取，"
-                 "不要再去磁盘搜索，也不要对已存在的文件重复生成）："]
+        # **两种模式都要给清单**（以前编程模式只注入工程目录，于是模型看不到本会话生成的
+        # 视频 / 文档，让它"把前面生成的视频合成一下"时会答「工作区里没有任何视频文件，
+        # 之前那些名字都是我编的」——2026-09-24 真实事故）
+        if mode == "code":
+            lines = [
+                "本会话已有的**产物**清单（视频 / 文档 / 配图等，就收在工作区的 generated 里，"
+                "工程目录里也能看到）——"
+                "**这些是真实存在的文件**，引用时照抄下面的文件名，不要自己猜文件名："
+            ]
+        else:
+            lines = ["本会话工作区已有以下文件（可直接用 read_document 按路径读取，"
+                     "不要再去磁盘搜索，也不要对已存在的文件重复生成）："]
         lines.extend(format_workspace_file(item) for item in workspace)
+        if mode == "code":
+            lines.append(
+                "（要用它们就把**文件名**原样传给对应工具：生成视频时 anchor / continue_from "
+                "给这个名字，拼接用 merge_videos，读文档用 read_document。）"
+            )
         messages.append({"role": "system", "content": "\n".join(lines)})
 
     if code_files and mode == "code":
@@ -241,11 +311,19 @@ def build_chat_messages(
             if preview:
                 notes.append(f"  内容摘录：\n{preview}")
         if mode == "code":
-            # 编程模式的附件已由界面复制进工程目录（见 code_workspace.import_attachments）：
-            # 不说明的话，模型会拿着名字去磁盘别处找，然后回「找不到这个文件」
+            # 附件落在工作区的 upload（工程目录默认就是旁边的 generated）：
+            # 不给出真实路径的话，模型会拿着名字去磁盘别处找，然后回「找不到这个文件」
+            paths = "、".join(
+                str(item.path) for item in attachments if getattr(item, "path", "")
+            )
             notes.append(
-                "（以上附件已复制到**工程目录**里，直接用文件名引用即可，"
-                "不要到别的目录去找；写入代码里时也用这个文件名）"
+                "（以上附件已复制进本会话工作区的 upload 目录 —— 它在**工程目录**旁边，"
+                + (f"引用时用这个路径：{paths}；" if paths else "")
+                + "不要到别的目录去找）"
+            )
+        else:
+            notes.append(
+                "（以上附件就在本会话工作区的 upload 目录里，按文件名引用即可）"
             )
         messages.append({"role": "system", "content": "\n".join(notes)})
 

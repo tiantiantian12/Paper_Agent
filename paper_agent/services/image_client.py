@@ -29,7 +29,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from paper_agent.core.constants import (
-    ARTIFACTS_DIR,
     IMAGE_API_BASE_URL,
     IMAGE_DEFAULT_SIZE,
     IMAGE_MODEL_ID,
@@ -118,10 +117,10 @@ def normalize_size(size: str) -> str:
 def _unique_path(name: str) -> Path:
     """在**本会话**的产物目录里取一个不重名的路径（同名自动加 ``-1``）。
 
-    落点由 :mod:`paper_agent.services.session_artifacts` 决定：同一个会话的产物放在
-    一起，别的会话的同类文件（命名规则一样）不会混进来。
+    落点由 :mod:`paper_agent.services.session_workspace` 决定：本会话工作区的
+    ``generated`` 目录，别的会话的同类文件（命名规则一样）不会混进来。
     """
-    return session_artifacts.unique_path(name, base=ARTIFACTS_DIR)
+    return session_artifacts.unique_path(name)
 
 
 class ImageClient:

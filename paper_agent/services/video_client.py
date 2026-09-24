@@ -25,7 +25,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
-from paper_agent.core.constants import ARTIFACTS_DIR, SERVER_USER_AGENT
+from paper_agent.core.constants import SERVER_USER_AGENT
 from paper_agent.services import session_artifacts
 
 VIDEO_TIMEOUT = 120              # 创建 / 查询的单次请求超时
@@ -274,10 +274,11 @@ def snap_seconds(value: Any) -> str:
 def _unique_path(name: str) -> Path:
     """在**本会话**的产物目录里取一个不重名的路径（同名自动加 ``-1``）。
 
-    落点由 :mod:`paper_agent.services.session_artifacts` 决定 —— 视频名字里带时间戳，
-    不同会话很容易撞出同一个名字，混在一个平铺目录里就会被互相认错。
+    落点由 :mod:`paper_agent.services.session_workspace` 决定（本会话工作区的
+    ``generated``）—— 视频名字里带时间戳，不同会话很容易撞出同一个名字，
+    混在一个平铺目录里就会被互相认错。
     """
-    return session_artifacts.unique_path(name, base=ARTIFACTS_DIR)
+    return session_artifacts.unique_path(name)
 
 
 def new_artifact_path(name: str) -> Path:

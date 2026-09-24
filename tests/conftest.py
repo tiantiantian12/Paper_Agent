@@ -82,13 +82,19 @@ def _doc_mode_by_default():
 
 @pytest.fixture
 def artifacts_dir(tmp_path, monkeypatch):
-    """把产物目录指向临时目录，避免测试污染真实数据。"""
+    """产物落点：本会话工作区的 ``generated``（拿不到会话上下文时是 ``_shared``）。
+
+    产物不再落在 ``data/artifacts`` —— 落点由 :mod:`session_workspace` 统一决定
+    （工作区根已由 ``_isolated_workspace`` 指到临时目录）。``document_skills.ARTIFACTS_DIR``
+    现在只用于解析「升级前留下的旧文件」，这里照样隔离它。
+    """
+    from paper_agent.services import session_workspace
     from paper_agent.services.skills import document_skills
 
     target = tmp_path / "artifacts"
     target.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(document_skills, "ARTIFACTS_DIR", target)
-    return target
+    return session_workspace.generated_dir(create=True)
 
 
 @pytest.fixture
@@ -103,7 +109,12 @@ def attachments_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 def managed_dirs(tmp_path, monkeypatch):
-    """把附件目录与产物目录都指向临时目录（utils.files 与 document_skills 同步）。"""
+    """把附件目录与产物落点都指向临时目录（utils.files 与 document_skills 同步）。
+
+    返回的第二个值是**产物落点**（工作区 ``generated``），不是旧的 ``artifacts`` 目录：
+    用例断言「生成了什么文件」时看的是这里。
+    """
+    from paper_agent.services import session_workspace
     from paper_agent.services.skills import document_skills
     from paper_agent import utils
 
@@ -114,7 +125,7 @@ def managed_dirs(tmp_path, monkeypatch):
     for module in (utils.files, document_skills):
         monkeypatch.setattr(module, "ATTACHMENTS_DIR", attachments)
         monkeypatch.setattr(module, "ARTIFACTS_DIR", artifacts)
-    return attachments, artifacts
+    return attachments, session_workspace.generated_dir(create=True)
 
 
 @pytest.fixture

@@ -12,7 +12,6 @@ import re
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from paper_agent.core.constants import ARTIFACTS_DIR
 from paper_agent.services import session_artifacts
 from paper_agent.services.image_client import IMAGE_MIME, image_data_url
 from paper_agent.services.skills.base import Tool, ToolParam, ToolResult
@@ -122,10 +121,10 @@ class GenerateImageTool(Tool):
 
         target = Path(raw).name.lower()
         stem = Path(target).stem.lower()
-        # 候选只来自**本会话**（清单 + 本会话产物目录 + 根目录旧文件 + 会话工程目录）：
+        # 候选只来自**本会话**（清单 + 本会话工作区 + 会话工程目录）：
         # 配图的名字都是 `配图-时间戳-1.png`，扫别的会话目录就会拿错图
         candidates = [
-            *session_artifacts.candidates(self._session_files, base=ARTIFACTS_DIR),
+            *session_artifacts.candidates(self._session_files),
             *session_artifacts.extra_paths(self._extra_dirs),
         ]
 
@@ -167,7 +166,6 @@ class GenerateImageTool(Tool):
                         "（先列一遍本会话文件：list_artifacts / list_files）。"
                         + session_artifacts.name_hint(
                             self._session_files, IMAGE_MIME, self._extra_dirs,
-                            base=ARTIFACTS_DIR,
                         )
                     ),
                 )

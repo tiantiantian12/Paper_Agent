@@ -19,11 +19,6 @@ def _tool(files, tmp_path, monkeypatch, images_provider=None):
     from paper_agent.services.image_client import ImageClient
     from paper_agent.services.skills.image_skills import GenerateImageTool
 
-    # 产物目录隔离，免得被测机器的真实产物混进来
-    from paper_agent.services import image_client as image_module
-
-    monkeypatch.setattr(image_module, "ARTIFACTS_DIR", tmp_path / "artifacts")
-
     calls: list[dict] = []
 
     def generator(prompt, **kwargs):
@@ -232,10 +227,7 @@ def test_description_warns_against_intermediate_still_for_video():
 
 def test_registry_passes_session_files(tmp_path, monkeypatch):
     """接线回归：注册表要把本会话文件清单交给图片工具（否则解析不到参考图）。"""
-    from paper_agent.services import image_client as image_module
     from paper_agent.services.skills import build_default_registry
-
-    monkeypatch.setattr(image_module, "ARTIFACTS_DIR", tmp_path / "artifacts")
     source = tmp_path / "底图.png"
     source.write_bytes(PNG_BYTES)
     calls: list[dict] = []
@@ -298,10 +290,7 @@ def test_registry_passes_uploaded_images(mode, tmp_path, monkeypatch):
     视频那条线早就有（图生视频自动用本轮的图），图片这条线一直没接 ——
     于是「传了照片做定妆图」只能靠模型自己想起来填 reference_image。
     """
-    from paper_agent.services import image_client as image_module
     from paper_agent.services.skills import build_default_registry
-
-    monkeypatch.setattr(image_module, "ARTIFACTS_DIR", tmp_path / "artifacts")
     calls: list[dict] = []
 
     registry = build_default_registry(

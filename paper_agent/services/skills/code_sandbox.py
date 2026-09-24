@@ -34,11 +34,27 @@ def _env_path(name: str, fallback: str = "") -> Path | None:
     return Path(value) if value else (Path(fallback) if fallback else None)
 
 
+def _workspace_dirs() -> list[Path]:
+    """本会话工作区里允许读写的一对目录（upload / generated）。
+
+    产物已经从 ``data/artifacts`` 搬进会话工作区（见 ``services/session_workspace.py``），
+    沙箱不放开这两个目录的话，文档模式下用 execute_python 写出来的文件就落不进
+    本会话的工作区，模型会回「不允许写入」。
+    """
+    from paper_agent.services import session_workspace
+
+    return [
+        session_workspace.upload_dir(create=False),
+        session_workspace.generated_dir(create=False),
+    ]
+
+
 def cleanable_dirs() -> list[Path]:
     """允许删除的目录白名单（临时文件 / 缓存 / 回收站 / 产物目录）。"""
     dirs: list[Path] = [
         Path(tempfile.gettempdir()),
         ARTIFACTS_DIR,
+        *_workspace_dirs(),
     ]
     windir = _env_path("WINDIR", r"C:\Windows")
     if windir:
@@ -74,8 +90,8 @@ def protected_dirs() -> list[Path]:
 
 
 def writable_dirs() -> list[Path]:
-    """允许写入的目录（产物与临时目录）。"""
-    return [ARTIFACTS_DIR, Path(tempfile.gettempdir())]
+    """允许写入的目录（本会话工作区 + 旧产物目录 + 临时目录）。"""
+    return [ARTIFACTS_DIR, *_workspace_dirs(), Path(tempfile.gettempdir())]
 
 
 def _under(target: Path, parent: Path) -> bool:

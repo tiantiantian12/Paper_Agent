@@ -30,9 +30,11 @@ def test_attachments_are_copied_into_workspace(tmp_path):
         workspace, [_attachment(source, "设计稿.png"), _attachment(source, "需求.md")]
     )
 
-    assert copied == ["设计稿.png", "需求.md"]
-    assert (workspace / "设计稿.png").is_file(), "文件要真的在工程目录里"
-    assert (workspace / "需求.md").read_bytes() == (source / "需求.md").read_bytes(), "内容要一致"
+    assert copied == ["upload/设计稿.png", "upload/需求.md"]
+    assert (workspace / "upload" / "设计稿.png").is_file(), "文件要真的在工程目录里"
+    assert (workspace / "upload" / "需求.md").read_bytes() == (
+        source / "需求.md"
+    ).read_bytes(), "内容要一致"
 
 
 def test_import_is_idempotent(tmp_path):
@@ -47,26 +49,30 @@ def test_import_is_idempotent(tmp_path):
     first = import_attachments(workspace, items)
     second = import_attachments(workspace, items)
 
-    assert first == second == ["图.png"]
-    assert len(list(workspace.iterdir())) == 1
+    assert first == second == ["upload/图.png"]
+    assert len(list((workspace / "upload").iterdir())) == 1
 
 
 def test_existing_project_file_is_not_overwritten(tmp_path):
-    """工程目录里已经有同名文件（用户自己的）：加后缀，绝不覆盖。"""
+    """工作区里已经传过同名文件（内容不同）：加后缀，绝不覆盖。
+
+    上传的文件一律进 ``upload`` —— 所以工程目录根下用户自己的 ``index.html``
+    根本不会被碰到，这里验的是同一份 upload 目录里的同名文件。
+    """
     from paper_agent.services.skills.code_workspace import import_attachments
 
     source = tmp_path / "att"
     source.mkdir()
     workspace = tmp_path / "project"
-    workspace.mkdir()
-    mine = workspace / "index.html"
+    (workspace / "upload").mkdir(parents=True)
+    mine = workspace / "upload" / "index.html"
     mine.write_text("<h1>我的工程</h1>", encoding="utf-8")
 
     copied = import_attachments(
         workspace, [_attachment(source, "index.html", "<p>上传的</p>".encode())]
     )
 
-    assert copied == ["index-1.html"], f"要另存一份，不覆盖：{copied}"
+    assert copied == ["upload/index-1.html"], f"要另存一份，不覆盖：{copied}"
     assert mine.read_text(encoding="utf-8") == "<h1>我的工程</h1>"
 
 
@@ -100,7 +106,7 @@ def test_model_can_read_uploaded_file(tmp_path):
     spec.write_text("做一个登录页", encoding="utf-8")
     import_attachments(workspace, [Attachment(name=spec.name, path=str(spec), kind="file")])
 
-    result = ReadCodeFileTool(workspace).run(path="需求.md")
+    result = ReadCodeFileTool(workspace).run(path="upload/需求.md")
 
     assert result.success is True
     assert "做一个登录页" in result.content

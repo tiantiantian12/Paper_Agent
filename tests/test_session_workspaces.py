@@ -28,13 +28,25 @@ def temp_workspace_root(tmp_path, monkeypatch):
 
 # ---------------------------------------------------------------- 路径规则
 def test_each_session_gets_its_own_directory(temp_workspace_root):
+    """工程目录默认是工作区里的 generated：模型生成的一切都写在这一层。"""
+    from paper_agent.services import session_workspace
+
     first = code_root("session-a")
     second = code_root("session-b")
 
-    assert first == temp_workspace_root / "session-a"
-    assert second == temp_workspace_root / "session-b"
+    assert first == temp_workspace_root / "session-a" / session_workspace.GENERATED_DIR_NAME
+    assert second == temp_workspace_root / "session-b" / session_workspace.GENERATED_DIR_NAME
     assert first != second
     assert first.is_dir() and second.is_dir()
+
+
+def test_legacy_session_keeps_its_root_directory(temp_workspace_root):
+    """改版前把代码写在工作区根目录的老会话：继续用根目录，别让文件从面板消失。"""
+    old = temp_workspace_root / "session-old"
+    old.mkdir(parents=True)
+    (old / "main.py").write_text("print(1)", encoding="utf-8")
+
+    assert code_root("session-old") == old
 
 
 def test_session_can_point_at_its_own_folder(temp_workspace_root, tmp_path):
@@ -86,12 +98,12 @@ def test_switching_session_switches_workspace(qapp, tmp_path, temp_workspace_roo
     window = _window(qapp, tmp_path, [first, second], monkeypatch)
 
     window.activate_session(first.id)
-    assert window._session_workspace() == temp_workspace_root / first.id
+    assert window._session_workspace() == code_root(first.id)
 
     window.activate_session(second.id)
     workspace = window._session_workspace()
-    assert workspace == temp_workspace_root / second.id
-    assert workspace != temp_workspace_root / first.id
+    assert workspace == code_root(second.id)
+    assert workspace != code_root(first.id)
 
 
 def test_submit_sends_each_session_its_own_file_list(
@@ -105,10 +117,10 @@ def test_submit_sends_each_session_its_own_file_list(
     second = ChatSession(title="脚本", mode=MODE_CODE)
     window = _window(qapp, tmp_path, [first, second], monkeypatch)
 
-    (temp_workspace_root / first.id).mkdir(parents=True, exist_ok=True)
-    (temp_workspace_root / first.id / "index.html").write_text("<html>", encoding="utf-8")
-    (temp_workspace_root / second.id).mkdir(parents=True, exist_ok=True)
-    (temp_workspace_root / second.id / "crawler.py").write_text("print(1)", encoding="utf-8")
+    (temp_workspace_root / first.id / "generated").mkdir(parents=True, exist_ok=True)
+    (temp_workspace_root / first.id / "generated" / "index.html").write_text("<html>", encoding="utf-8")
+    (temp_workspace_root / second.id / "generated").mkdir(parents=True, exist_ok=True)
+    (temp_workspace_root / second.id / "generated" / "crawler.py").write_text("print(1)", encoding="utf-8")
 
     captured: dict = {}
     original = mw.build_chat_messages
@@ -153,6 +165,43 @@ def test_picking_a_folder_is_remembered_per_session(
     assert first.code_root == str(chosen)
     assert second.code_root == "", "别的会话不该跟着变"
     assert window.config.code_root == "", "不再写进全局配置"
+
+
+# ---------------------------------------------------------------- 目录布局可见性
+def test_workspace_panel_shows_upload_and_generated(
+    qapp, tmp_path, temp_workspace_root, monkeypatch
+):
+    """切到编程模式，面板里要能看到 `upload/` 与 `generated/` 两个固定目录。
+
+    不建出来的话，它们只在真有文件时才出现 —— 用户会以为「生成的产物没进
+    generated」（真实的困惑：截图里只看得到模型写的 quicksort.py）。
+    """
+    from paper_agent.core.config import MODE_CODE
+    from paper_agent.services import session_workspace
+
+    session = ChatSession(title="脚本", mode=MODE_CODE)
+    window = _window(qapp, tmp_path, [session], monkeypatch)
+
+    window.activate_session(session.id)
+
+    assert session_workspace.upload_dir(session.id).is_dir()
+    assert session_workspace.generated_dir(session.id).is_dir()
+
+
+def test_custom_workspace_is_not_polluted_with_our_dirs(
+    qapp, tmp_path, temp_workspace_root, monkeypatch
+):
+    """用户自己选的工程目录里不许塞 upload / generated —— 那是他的项目。"""
+    from paper_agent.core.config import MODE_CODE
+
+    chosen = tmp_path / "my-project"
+    chosen.mkdir()
+    session = ChatSession(title="我的项目", mode=MODE_CODE, code_root=str(chosen))
+    window = _window(qapp, tmp_path, [session], monkeypatch)
+
+    window.activate_session(session.id)
+
+    assert list(chosen.iterdir()) == []
 
 
 # ---------------------------------------------------------------- 老数据
@@ -257,7 +306,7 @@ def test_new_code_session_gets_its_own_workspace(
     window.sessions[fresh.id] = fresh
 
     assert old.code_root == str(legacy)
-    assert window._session_workspace(fresh) == temp_workspace_root / fresh.id
+    assert window._session_workspace(fresh) == code_root(fresh.id)
     assert window._session_workspace(fresh) != window._session_workspace(old)
 
 
@@ -280,8 +329,8 @@ def test_session_that_never_wrote_code_is_not_pinned(
     window._pin_legacy_workspaces([session])
     window._ensure_session_workspace(session, "code")
 
-    assert session.code_root == str(legacy / session.id), "应该用它自己的会话目录"
-    assert window._session_workspace(session) == legacy / session.id
+    assert session.code_root == str(code_root(session.id)), "应该用它自己的会话目录"
+    assert window._session_workspace(session) == code_root(session.id)
 
 
 def test_mis_pinned_session_is_released(qapp, tmp_path, temp_workspace_root, monkeypatch):

@@ -24,9 +24,8 @@ PNG_B64 = base64.b64encode(PNG_BYTES).decode()
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
-    """产物落到临时目录，并拦掉真正的网络请求。"""
-    monkeypatch.setattr(image_module, "ARTIFACTS_DIR", tmp_path)
+def client():
+    """拦掉真正的网络请求（产物落点由 conftest 的 _isolated_workspace 统一隔离）。"""
     return ImageClient(base_url="https://token.sensenova.cn/v1", api_key="sk-x")
 
 
@@ -175,8 +174,7 @@ def test_content_error_is_not_retried(client, monkeypatch):
     assert len(attempts) == 1
 
 
-def test_missing_key_rejected(tmp_path, monkeypatch):
-    monkeypatch.setattr(image_module, "ARTIFACTS_DIR", tmp_path)
+def test_missing_key_rejected():
     bare = ImageClient(base_url="https://token.sensenova.cn/v1", api_key="")
 
     assert bare.available is False
@@ -191,8 +189,7 @@ PNG_DATA_URL = "data:image/png;base64," + PNG_B64
 
 
 @pytest.fixture
-def agnes(tmp_path, monkeypatch):
-    monkeypatch.setattr(image_module, "ARTIFACTS_DIR", tmp_path)
+def agnes():
     return ImageClient(
         base_url="https://api.agnes-ai.cn/v1",
         api_key="sk-x",
@@ -205,9 +202,8 @@ def test_provider_is_detected_from_base_url(agnes, client):
     assert client.provider == "standard"
 
 
-def test_provider_detected_behind_server_proxy(tmp_path, monkeypatch):
+def test_provider_detected_behind_server_proxy(monkeypatch):
     """内置模型走服务端代理：地址是我们自己的，只能靠模型名认口味。"""
-    monkeypatch.setattr(image_module, "ARTIFACTS_DIR", tmp_path)
     proxied = ImageClient(
         base_url="http://127.0.0.1:8000/api/llm/v1",
         api_key="pk-user",

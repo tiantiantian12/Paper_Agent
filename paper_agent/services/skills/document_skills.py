@@ -133,7 +133,7 @@ def _split_image(text: str) -> tuple[str, str]:
 
 
 def _resolve_image(source: str) -> Path | None:
-    """定位图片：先按原路径，再按文件名在产物（**本会话目录优先**）/ 附件里找。"""
+    """定位图片：先按原路径，再按文件名在本会话工作区（upload / generated）/ 旧目录里找。"""
     if not source:
         return None
     candidate = Path(source)
@@ -142,6 +142,10 @@ def _resolve_image(source: str) -> Path | None:
     name = candidate.name
     if not name:
         return None
+    found = session_artifacts.find_named(name)
+    if found is not None:
+        return found
+    # 升级前留下的旧位置（产物根目录 / 附件目录），会话记录里存的是这些绝对路径
     for directory in (
         session_artifacts.dir_for(ARTIFACTS_DIR, create=False),
         ARTIFACTS_DIR,
@@ -261,9 +265,7 @@ def _unique_path(name: str, session_paths: set[str] | None = None) -> Path:
     同名文件若属于**本会话**（用户正在改的同一份文档），原地覆盖；
     否则退化为「-1、-2」后缀，避免堆一堆副本。
     """
-    return session_artifacts.unique_path(
-        name, base=ARTIFACTS_DIR, taken=session_paths or ()
-    )
+    return session_artifacts.unique_path(name, taken=session_paths or ())
 
 
 # ---------------------------------------------------------------- Word
@@ -1713,9 +1715,7 @@ class _ArtifactTool(Tool):
             # 续写必须打到「同名那份」上：走 _unique_path 去重的话会另起一个 -1 文件，
             # 模型以为在追加，实际是一堆散落的副本。同名那份优先在本会话产物目录里找，
             # 升级前生成的旧文件则在会话清单里（那批还平铺在产物根目录）。
-            existing = session_artifacts.find_named(
-                name, self._session_paths, base=ARTIFACTS_DIR
-            )
+            existing = session_artifacts.find_named(name, self._session_paths)
             if existing is not None:
                 return existing
         if Path(name).suffix.lower() != default_ext:
@@ -2096,6 +2096,7 @@ class ListArtifactsTool(Tool):
     name = "list_artifacts"
     description = (
         "列出本会话工作区已有的文件（含上传与各轮生成的产物）及其路径。"
+        "上传的在 `upload/`、生成的在 `generated/`（两者都在本会话工作区里）。"
         "一般不需要调用：这些文件已在系统提示里给出，直接用 read_document 读即可。"
     )
 
@@ -2109,10 +2110,10 @@ class ListArtifactsTool(Tool):
             return ToolResult(
                 content=f"本会话工作区文件（共 {len(self._session_files)} 个）：\n{listing}"
             )
-        # 兜底：拿不到会话清单时才扫（只扫**本会话**目录 + 根目录里的旧文件，
+        # 兜底：拿不到会话清单时才扫（只扫**本会话**工作区 + 本会话旧产物目录，
         # 别的会话目录不进 —— 一起扫就会把别人的产物列进来）
         files = sorted(
-            (Path(item) for item in session_artifacts.candidates(base=ARTIFACTS_DIR)),
+            (Path(item) for item in session_artifacts.candidates()),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
@@ -2184,6 +2185,9 @@ def register_code_mode_skills(
     # 把素材写在那里，而它们都不在 data/artifacts 里。只给 session_files 还不够。
     extra_dirs = [str(root)]
     registry.register(ReadDocumentTool())
+    # 编程模式也要能列**本会话产物**：不然模型问「我生成了哪些视频」时只有 list_files
+    # 可调（它只看工程目录），会得出「工作区里没有任何视频文件」的错误结论
+    registry.register(ListArtifactsTool(session_files))
     registry.register(ExecutePythonTool(workspace=root, relaxed=True))
     register_code_skills(registry, root)
     if image_generator is not None:

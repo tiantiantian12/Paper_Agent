@@ -76,14 +76,35 @@ def default_root() -> Path:
     return DATA_DIR / "workspace"
 
 
+def _generated_root(workspace: Path) -> Path:
+    """会话工作区里「模型产出」那一层：``<工作区>/generated``。
+
+    用户**没有指定**目录时（应用自己建的会话工作区），模型生成的一切默认都写在这里：
+    代码文件、项目目录、视频、配图、Word / PPT —— 用户一眼能找到，也和「上传的东西
+    在 upload、生成的东西在 generated」这条规矩对上。
+
+    例外：改版前的会话把工程文件直接写在工作区根目录下，那些文件还在那儿 ——
+    为了不让它们从面板里消失，这种情况继续用根目录（新建的会话一律走 generated）。
+    """
+    from paper_agent.services.session_workspace import GENERATED_DIR_NAME, UPLOAD_DIR_NAME
+
+    fixed = (GENERATED_DIR_NAME, UPLOAD_DIR_NAME)
+    try:
+        has_legacy = any(item.name not in fixed for item in workspace.iterdir())
+    except OSError:
+        has_legacy = False
+    return workspace if has_legacy else workspace / GENERATED_DIR_NAME
+
+
 def code_root(session_id: str = "", session_path: str = "") -> Path:
     """工程目录（**每个会话一份**）。
 
     优先级：环境变量 ``PAPERAGENT_CODE_ROOT`` → 会话自己选的目录（``session_path``）
-    → 会话专属目录 ``workspace/<会话 id>`` → 共享默认目录 ``workspace``。
+    → 会话专属目录 ``workspace/<会话 id>/generated`` → 共享默认目录 ``workspace``。
 
-    会话之间不共用同一份工程文件：A 会话的前端项目和 B 会话的脚本不会混在一起，
-    右侧工作区面板与模型看到的文件清单也各自独立。
+    用户没指定的那一档落在 ``generated``：模型写的代码与它生成的视频 / 文档同处一层，
+    不再散在工作区根目录里。会话之间不共用同一份工程文件：A 会话的前端项目和
+    B 会话的脚本不会混在一起，右侧工作区面板与模型看到的文件清单也各自独立。
     """
     override = os.environ.get("PAPERAGENT_CODE_ROOT")
     if override:
@@ -91,7 +112,7 @@ def code_root(session_id: str = "", session_path: str = "") -> Path:
     elif session_path:
         root = Path(session_path).expanduser()
     elif session_id:
-        root = default_root() / session_id
+        root = _generated_root(default_root() / session_id)
     else:
         shared = configured_root()
         root = Path(shared).expanduser() if shared else default_root()
@@ -261,10 +282,27 @@ def _unique_path(path: Path) -> Path:
         index += 1
 
 
-def import_attachments(root: Path | None = None, attachments=None) -> list[str]:
-    """把本轮上传的附件复制进工程目录，返回复制进去的**文件名**列表。
+def _upload_target(workspace: Path) -> Path:
+    """附件的落点：会话工作区的 ``upload``（与 ``generated`` 并列）。
 
-    为什么必须复制：附件平时存在应用的 ``data/attachments`` 里，而编程模式的工具
+    工程目录默认就是 ``generated``，它的**兄弟** upload 才是上传目录 ——
+    在 generated 里再套一层 upload 的话，同一个文件会存成两份。
+    """
+    from paper_agent.services.session_workspace import GENERATED_DIR_NAME, UPLOAD_DIR_NAME
+
+    if workspace.name == GENERATED_DIR_NAME:
+        return workspace.parent / UPLOAD_DIR_NAME
+    return workspace / UPLOAD_DIR_NAME
+
+
+def import_attachments(root: Path | None = None, attachments=None) -> list[str]:
+    """把本轮上传的附件复制进工作区的 ``upload`` 目录，返回**相对工程目录**的路径列表。
+
+    落点是会话工作区的 ``upload``：文档模式上传的文件本来就存在那里，所以默认布局下
+    两边是**同一份文件**（同名同大小会跳过，不会复制出两份），模型按名字找文件时
+    无论哪种模式都能命中。
+
+    为什么必须复制：附件平时存在应用的上传目录里，而编程模式的工具
     （``list_files`` / ``read_file`` / ``run_command``）都钉在**工程目录**内 ——
     不复制进来的话，模型在工程目录里根本看不到用户传的文件，只能回「找不到这个文件」；
     图片也一样（模型能"看图"，但要写进代码 ``<img src="...">`` 得先有真实文件）。
@@ -274,7 +312,10 @@ def import_attachments(root: Path | None = None, attachments=None) -> list[str]:
     """
     import shutil
 
-    base = Path(root or code_root())
+    workspace = Path(root or code_root())
+    base = _upload_target(workspace)
+    # 相对工程目录的写法：告诉模型该怎么写（默认布局下 upload 在工程目录的**旁边**）
+    prefix = os.path.relpath(base, workspace).replace("\\", "/")
     copied: list[str] = []
     for item in attachments or []:
         source = Path(str(getattr(item, "path", "") or ""))
@@ -284,13 +325,13 @@ def import_attachments(root: Path | None = None, attachments=None) -> list[str]:
             base.mkdir(parents=True, exist_ok=True)
             existing = base / source.name
             if existing.is_file() and existing.stat().st_size == source.stat().st_size:
-                copied.append(existing.name)
+                copied.append(f"{prefix}/{existing.name}")
                 continue
             target = _unique_path(existing)
             shutil.copy2(source, target)
         except OSError:
             continue
-        copied.append(target.name)
+        copied.append(f"{prefix}/{target.name}")
     return copied
 
 
@@ -535,7 +576,13 @@ class ReadCodeFileTool(Tool):
 
 class ListFilesTool(Tool):
     name = "list_files"
-    description = "列出工程目录下的文件与子目录（最多 200 条），用于了解项目结构。"
+    description = (
+        "列出**工程目录**下的文件与子目录（最多 200 条），用于了解项目结构。"
+        "工程目录默认就是本会话工作区的 `generated/`：你写的**代码 / 项目目录**和生成的"
+        "**配图 / 视频 / Word / PPT** 都在这里（默认落点，用户没指定路径时一律写这儿）；"
+        "用户上传的文件在工作区的 `upload/`（相对这里是 `../upload/`）。"
+        "只想看产物清单（带完整路径）用 `list_artifacts`。"
+    )
 
     def __init__(self, workspace: Path | None = None) -> None:
         self._workspace = workspace or code_root()
@@ -563,6 +610,11 @@ class ListFilesTool(Tool):
                 lines.append(f"  {item.name}  ({size} 字节)")
         if len(entries) > MAX_LIST_ENTRIES:
             lines.append(f"  …还有 {len(entries) - MAX_LIST_ENTRIES} 项")
+        # 防呆：模型问「我生成的视频在哪」时，只扫一眼根目录（generated 是个子目录）
+        # 会得出「工作区里没有任何视频文件」的错误结论（2026-09-24 真实事故）
+        lines.append("（这里就是本会话的 `generated/`：代码与生成的产物都在这层；"
+                     "上传的在旁边的 `upload/`，按名字找文件时直接用文件名即可，"
+                     "完整清单用 list_artifacts。）")
         return ToolResult(content="\n".join(lines))
 
 

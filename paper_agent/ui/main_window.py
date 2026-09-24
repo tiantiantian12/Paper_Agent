@@ -60,7 +60,7 @@ from paper_agent.services.key_pool import looks_rate_limited
 from paper_agent.services.llm_key import LlmKeySyncer
 from paper_agent.services.llm_models import LlmModelsSyncer
 from paper_agent.services.reasoning import is_unsupported_error
-from paper_agent.services import session_artifacts
+from paper_agent.services import session_artifacts, session_workspace
 from paper_agent.services.skills import code_workspace
 from paper_agent.services.skills.code_workspace import build_tree, code_root
 from paper_agent.services.paper_outline import (
@@ -486,6 +486,11 @@ class MainWindow(FramelessMixin, QWidget):
             self._auto_retry_count = 0
 
         self.current = session
+        # 上传的文件落进**这个会话**的工作区（upload），和生成的产物（generated）
+        # 在同一棵树里：模型按名字找文件时两边都扫得到，不会「传了却找不到」
+        self.composer.set_upload_dir(
+            session_workspace.upload_dir(session.id, create=False)
+        )
         # 模式先跟着会话切好，后面刷新结构面板 / 工作区才知道该显示哪一边
         self._apply_session_mode(session.mode)
         self.chat_view.clear_messages()
@@ -736,8 +741,9 @@ class MainWindow(FramelessMixin, QWidget):
         for path in orphans:
             if delete_managed_file(path)[0]:
                 removed += 1
-        # 文件清完顺手收掉空的会话产物目录，否则每清一次就留一堆空壳
-        session_artifacts.prune_empty(base=ARTIFACTS_DIR)
+        # 文件清完顺手收掉空的目录，否则每清一次就留一堆空壳
+        session_artifacts.prune_empty(base=ARTIFACTS_DIR)     # 升级前的旧产物目录
+        session_workspace.prune_empty()                        # 会话工作区
         signals.toast_requested.emit(f"已清理 {removed} 个文件（{human_readable_size(total)}）")
 
     def export_session(self, session_id: str) -> None:
@@ -848,7 +854,7 @@ class MainWindow(FramelessMixin, QWidget):
 
             workspace = self._session_workspace(target)
             code_root_path = str(workspace)
-            # 上传的附件先**落到工程目录里**，再扫文件清单 —— 否则模型在工程目录里
+            # 上传的附件先**落到工程目录的 upload 里**，再扫文件清单 —— 否则模型在工程目录里
             # 看不见用户传的文件（工具都钉在工程目录内），只会回「找不到这个文件」。
             # 顺序很重要：先复制，清单里才会带上它们。
             if attachments:
@@ -868,6 +874,8 @@ class MainWindow(FramelessMixin, QWidget):
             mode=mode,
             code_files=code_files,
             code_root=code_root_path,
+            # 会话工作区根目录：模型据此知道 upload / generated 在哪（两种模式共用）
+            workspace_root=str(session_workspace.dir_of(target.id)),
         )
 
         if visible:
@@ -1682,6 +1690,14 @@ class MainWindow(FramelessMixin, QWidget):
         if self.current_mode() != MODE_CODE:
             return
         root = self._session_workspace()
+        # 让「上传进哪、生成进哪」在面板里一眼可见：把这两个固定子目录建出来
+        # （不然它们只在真的有文件时才出现，用户会以为生成的产物没进 generated）。
+        # 只在本会话**自己的工作区**里建 —— 用户自己选的工程目录别乱塞目录进去。
+        if self.current is not None and normalized_path(root) == normalized_path(
+            session_workspace.dir_of(self.current.id)
+        ):
+            session_workspace.upload_dir(self.current.id)
+            session_workspace.generated_dir(self.current.id)
         nodes, files, dirs = build_tree(root)
         signature = tree_signature(nodes)
         if skip_if_unchanged and signature == self._workspace_signature:

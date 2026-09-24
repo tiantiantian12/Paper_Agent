@@ -25,7 +25,6 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from paper_agent.core.constants import ARTIFACTS_DIR
 from paper_agent.services import session_artifacts
 from paper_agent.services.skills.base import Tool, ToolParam, ToolRegistry, ToolResult
 from paper_agent.utils.files import human_readable_size
@@ -392,8 +391,8 @@ def _safe_filename(name: str, suffix: str) -> str:
 
 
 def _unique_path(name: str, directory: Path | None = None) -> Path:
-    """在目标目录（默认本会话产物目录）里取一个不重名的路径。"""
-    return session_artifacts.unique_path(name, base=directory or ARTIFACTS_DIR)
+    """在目标目录（默认本会话工作区的 generated）里取一个不重名的路径。"""
+    return session_artifacts.unique_path(name, base=directory)
 
 
 def download_file(url: str, filename: str = "", directory: Path | None = None) -> Path:

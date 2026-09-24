@@ -58,10 +58,38 @@ def too_large(path: str | Path) -> bool:
     return file_size(path) > MAX_ATTACHMENT_BYTES
 
 
+def _workspace_dirs() -> list[Path]:
+    """会话工作区里的 ``upload`` / ``generated`` 两个子目录。
+
+    **只认这一层**：``workspace/<会话 id>/upload``、``workspace/<会话 id>/generated``。
+    编程模式的工程目录里也可能有叫 ``generated`` 的构建目录（前端项目常见），
+    二级以下一律不算 —— 否则「清理未引用的文件」会把用户真实的项目文件当垃圾删掉。
+    """
+    from paper_agent.services import session_workspace
+
+    root = session_workspace.root()
+    if not root.is_dir():
+        return []
+    found: list[Path] = []
+    for session_dir in root.iterdir():
+        if not session_dir.is_dir():
+            continue
+        for name in (session_workspace.UPLOAD_DIR_NAME, session_workspace.GENERATED_DIR_NAME):
+            child = session_dir / name
+            if child.is_dir():
+                found.append(child)
+    return found
+
+
+def managed_dirs() -> list[Path]:
+    """应用自己管着的目录：附件 / 产物 / 会话工作区的上传与生成目录。"""
+    return [ATTACHMENTS_DIR, ARTIFACTS_DIR, *_workspace_dirs()]
+
+
 def iter_managed_files() -> list[Path]:
-    """列出应用数据目录（附件 / 产物）下的全部文件。"""
+    """列出应用数据目录（附件 / 产物 / 工作区上传与生成目录）下的全部文件。"""
     files: list[Path] = []
-    for directory in (ATTACHMENTS_DIR, ARTIFACTS_DIR):
+    for directory in managed_dirs():
         if directory.exists():
             files.extend(item for item in directory.rglob("*") if item.is_file())
     return files
@@ -76,14 +104,18 @@ def normalized_path(path: str | Path) -> str:
 
 
 def is_managed_file(path: str | Path) -> bool:
-    """文件是否位于应用的附件 / 产物目录内（只有这些文件才允许真正删除）。"""
+    """文件是否位于应用的附件 / 产物 / 工作区上传与生成目录内。
+
+    只有这些文件才允许真正删除 —— 工作区里其它位置是**编程模式的工程文件**，
+    那是用户的项目，清理功能碰不得。
+    """
     if not path:
         return False
     try:
         target = Path(path).resolve()
     except OSError:
         return False
-    for directory in (ATTACHMENTS_DIR, ARTIFACTS_DIR):
+    for directory in managed_dirs():
         try:
             target.relative_to(Path(directory).resolve())
         except ValueError:
@@ -142,13 +174,18 @@ def save_pasted_image(image: QImage, directory: Path | None = None) -> str | Non
     return None
 
 
-def import_file(path: str | Path) -> str:
-    """把外部文件复制到附件目录，返回新路径（便于会话持久化后仍可访问）。"""
+def import_file(path: str | Path, directory: Path | None = None) -> str:
+    """把外部文件复制进应用目录，返回新路径（便于会话持久化后仍可访问）。
+
+    ``directory`` 省略时落到附件目录；界面上传时会传**本会话工作区的 upload 目录**
+    （见 ``services/session_workspace.py``），这样上传的文件和生成的文件在同一棵树里。
+    """
     source = Path(path)
     if not source.exists():
         return str(source)
-    target = unique_target_path(ATTACHMENTS_DIR / source.name)
-    ATTACHMENTS_DIR.mkdir(parents=True, exist_ok=True)
+    folder = Path(directory) if directory else ATTACHMENTS_DIR
+    target = unique_target_path(folder / source.name)
+    folder.mkdir(parents=True, exist_ok=True)
     try:
         shutil.copy2(source, target)
         return str(target)

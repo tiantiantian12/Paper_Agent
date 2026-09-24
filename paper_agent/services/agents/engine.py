@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
+from paper_agent.services import session_artifacts
 from paper_agent.services.key_pool import looks_rate_limited
 from paper_agent.services.skills.base import ToolRegistry
 from paper_agent.services.stream_draft import DraftExtractor
@@ -79,8 +80,12 @@ IMAGE_CLAIM_RE = re.compile(
 )
 IMAGE_RETRY_HINT = (
     "【事实校验】你上一条回复声称「图片已生成」，但本轮并没有真正调用 generate_image，"
-    "也没有产出任何图片文件 —— 文中的文件名/路径是编的。\n"
-    "现在请真正完成这件事：调用 generate_image，把画面描述写进 prompt 参数。"
+    "也没有产出任何图片文件 —— 文中的文件名/路径是编的"
+    "（名字里带**生成时刻**，你不可能预知）。\n"
+    "现在请真正完成这件事：\n"
+    "0) **先调用 list_artifacts 看本会话已有产物**：已经生成成功的**不要重画**；"
+    "如果只是文件名写错了，按工具返回的**真实文件名**更正即可，不必重新生成；\n"
+    "1) 确实还缺图，再调用 generate_image，把画面描述写进 prompt 参数。"
     "只有工具返回成功才能说「已生成」；如果调用失败、或你无法完成，"
     "就直接说明失败原因，**不要再给出任何文件名或本地路径**。"
 )
@@ -133,13 +138,24 @@ VIDEO_CLAIM_RE = re.compile(
     # 口语化的「出片完成」
     + r"|出片\s*(?:完成|好了|成功|了)"
 )
+# 正文里出现的**我们自己命名规则**的产物名（视频 / 配图）。名字里带**生成时刻**，
+# 模型不可能预知 —— 但它会「预测」一个写进正文（照抄历史里工具返回的格式）。
+# 后果：用户拿着不存在的名字去找文件；模型自己也因此怀疑「上一条没真调工具」而反复重拍
+# （2026-09-24 真实事故）。用它核对正文里的名字到底存不存在。
+VIDEO_NAME_RE = re.compile(r"(?:长)?视频-\d{8}-\d{6}(?:-\d+秒)?\.(?:mp4|mov)")
+IMAGE_NAME_RE = re.compile(r"配图-\d{8}-\d{6}-\d+\.(?:png|jpe?g|webp)")
 VIDEO_RETRY_HINT = (
     "【事实校验】你上一条回复声称「视频已生成 / 已合成」，但本轮产出的视频文件对不上"
-    "（要么一次 generate_video 都没调，要么调了但没成功）—— 文中的文件名是编的。\n"
+    "（要么一次 generate_video 都没调，要么调了但没成功）—— 文中的文件名是编的"
+    "（名字里带**生成时刻**，你不可能预知）。\n"
     "现在请真正完成这件事：\n"
-    "1) 还缺哪几段就调用 generate_video 补哪几段（画面描述写进 prompt 参数；要长视频就把 "
-    "seconds 写大，分段、取样、合成由客户端自动做）；\n"
-    "2) 确认每段都真的生成好之后，再用 merge_videos 按顺序拼成一条长片；\n"
+    "0) **先调用 list_artifacts 看本会话已经有哪些产物**：已经生成成功的**不要重拍**"
+    "（重拍既多等一两分钟又白花额度）；如果只是文件名写错了，按工具返回的"
+    "**真实文件名**更正即可，不必重新生成；\n"
+    "1) 确认还缺哪几段，再调用 generate_video 补哪几段（画面描述写进 prompt 参数；"
+    "要长视频就把 seconds 写大，分段、取样、合成由客户端自动做）；\n"
+    "2) 每段都真的生成好之后，用 merge_videos 按顺序拼成一条长片"
+    "（文件名照抄工具返回的原文，不要自己编）；\n"
     "3) 只有工具真的返回成功才能说「已生成 / 已合成」；如果调用失败、或你无法完成，"
     "就直接说明失败原因，**不要再给出任何文件名或本地路径**。"
 )
@@ -559,6 +575,7 @@ class AgentOrchestrator:
             claim_re=IMAGE_CLAIM_RE,
             retry_hint=IMAGE_RETRY_HINT,
             warning=IMAGE_MISSING_WARNING,
+            name_re=IMAGE_NAME_RE,
         )
 
     def _verify_video_claim(
@@ -582,6 +599,7 @@ class AgentOrchestrator:
             claim_re=VIDEO_CLAIM_RE,
             retry_hint=VIDEO_RETRY_HINT,
             warning=VIDEO_MISSING_WARNING,
+            name_re=VIDEO_NAME_RE,
         )
 
     def _has_video_tool(self) -> bool:
@@ -605,6 +623,7 @@ class AgentOrchestrator:
         claim_re: Any,
         retry_hint: str,
         warning: str,
+        name_re: Any = None,
     ) -> tuple[str, str, list[dict]]:
         """「声称做了、实际没做」的通用纠偏（图片与视频各调一次）。
 
@@ -618,8 +637,12 @@ class AgentOrchestrator:
         Returns:
             更新后的 ``(原始正文, 展示用正文, 产物列表)``。
         """
-        if not enabled or produced():
+        if not enabled:
             return final, cleaned, artifacts
+        if produced():
+            # 本轮**确实有产物**：不用纠偏；但正文里若写了磁盘上并不存在的名字
+            # （模型预测出来的），追加一句更正 —— 只说清以哪个文件为准，**不重拍**
+            return self._append_name_fix(final, cleaned, artifacts, produced(), name_re)
         if not claim_re.search(final or ""):
             return final, cleaned, artifacts
 
@@ -641,6 +664,47 @@ class AgentOrchestrator:
             cleaned = f"{cleaned.rstrip()}\n\n{warning}"
             self._emit(CONTENT_FINAL, cleaned)
             final = cleaned
+        return final, cleaned, artifacts
+
+    def _append_name_fix(
+        self,
+        final: str,
+        cleaned: str,
+        artifacts: list[dict],
+        produced: list[tuple[str, str]],
+        name_re: Any,
+    ) -> tuple[str, str, list[dict]]:
+        """本轮有产物、但正文提到的文件名磁盘上并不存在 → 追加一行「文件名校正」。
+
+        以前只在「零产物」时才纠偏，于是这种情况一路放行：模型**调了**工具、却按自己的
+        想象把名字写进正文（真实是 ``视频-20260924-111902.mp4``，它写成 ``...032357.mp4``），
+        用户拿着那个名字去找文件；更糟的是它自己后来发现对不上，就断定「上一条没真调工具」，
+        把已经生成过的段落**重拍一遍**（2026-09-24 真实事故）。
+
+        这里只更正名字、**不重拍**：重拍既多等一两分钟，又白花一次额度。
+        """
+        if name_re is None or not (cleaned or "").strip():
+            return final, cleaned, artifacts
+        known = {Path(path).name for _name, path in produced}
+        missing = [
+            name
+            for name in dict.fromkeys(name_re.findall(cleaned))
+            if name not in known
+            and session_artifacts.find_named(name) is None
+        ]
+        if not missing:
+            return final, cleaned, artifacts
+        real = "、".join(f"`{name}`" for name, _path in produced)
+        note = (
+            "\n\n---\n\n"
+            "> ⚠️ **文件名校正**：上面提到的 "
+            + "、".join(f"`{name}`" for name in missing)
+            + " 并不存在（那是推测出来的名字 —— 文件名里带生成时刻，无法预知）。\n"
+            f"> **本轮真实产出的是 {real}**：请以产物卡片 / 生成的文件清单为准。"
+            "**不需要重拍**，只是名字写错了而已。"
+        )
+        cleaned = f"{cleaned.rstrip()}{note}"
+        self._emit(CONTENT_FINAL, cleaned)
         return final, cleaned, artifacts
 
     def _ensure_answer(

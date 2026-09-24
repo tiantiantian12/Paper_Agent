@@ -22,9 +22,11 @@ from paper_agent.services.video_client import (
 
 
 @pytest.fixture
-def artifacts(tmp_path, monkeypatch):
-    monkeypatch.setattr(video_module, "ARTIFACTS_DIR", tmp_path)
-    return tmp_path
+def artifacts():
+    """产物落点：本会话工作区的 ``generated``（工作区根由 conftest 隔离）。"""
+    from paper_agent.services import session_workspace
+
+    return session_workspace.generated_dir(create=True)
 
 
 @pytest.fixture
