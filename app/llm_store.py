@@ -319,6 +319,16 @@ def pick_provider_key(model_id: str) -> sqlite3.Row | None:
     )
 
 
+def provider_key_active(model_id: str, api_key: str) -> bool:
+    """这把供应商密钥现在还能不能用（存在、未禁用、不在冷却中）。"""
+    row = db.query_one(
+        "SELECT 1 FROM provider_keys WHERE model_id=? AND api_key=? AND status='active'"
+        " AND (cooldown_until IS NULL OR cooldown_until < ?)",
+        (model_id, (api_key or "").strip(), now_text()),
+    )
+    return row is not None
+
+
 def mark_provider_key_used(key_id: int) -> None:
     db.execute("UPDATE provider_keys SET last_used_at=?, last_error=NULL WHERE id=?",
                (_used_stamp(), key_id))

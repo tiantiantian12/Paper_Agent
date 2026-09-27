@@ -102,6 +102,16 @@
         ]
       },
       {
+        "model_id": "glm-5.2",
+        "name": "GLM-5.2",
+        "desc": "对话：支持工具调用（OpenAI 兼容）",
+        "kind": "chat",
+        "base_url": "https://token.sensenova.cn/v1",
+        "api_keys": [
+          "sk-mqxi4DRpohd7TYn4ze9p9bZIftoDXXwk"
+        ]
+      },
+      {
         "model_id": "agnes-video-2.5-flash",
         "name": "Agnes Video 2.5 Flash",
         "desc": "文生视频：5 秒 720P，提交后轮询出片",

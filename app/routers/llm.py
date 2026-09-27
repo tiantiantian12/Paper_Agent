@@ -38,6 +38,47 @@ from app.schemas import BuiltinModelOut, UserKeyOut
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 
 
+def _no_provider_key_error(model_id: str) -> HTTPException:
+    """一把可用密钥都没有时的报错：**限流要说成限流**。
+
+    冷却几乎都是上游 429 触发的（``inference exceeds tpm/rpm limit``）。以前一律回
+    503「暂无可用的供应商密钥」，客户端把它当网络故障，1.5 秒后立刻重发 —— 于是一直
+    撞限流、一直 503（2026-09-26：deepseek-flash 两把 Key 全在冷却，客户端按秒重发）。
+    回 429 才会走客户端的**限流退避**（20s / 45s / 90s），用户看到的也是「服务繁忙」。
+    """
+    detail = f"模型 {model_id} 暂无可用的供应商密钥"
+    try:
+        rows = llm_store.list_provider_keys(model_id) or []
+    except Exception:      # noqa: BLE001 - 读不到就按普通 503 报
+        rows = []
+    cooling = [
+        str(row.get("last_error") or "")
+        for row in rows
+        if row.get("cooling") or row.get("cooldown_until")
+    ]
+    if any("429" in text or "rate" in text.lower() or "限流" in text for text in cooling):
+        return HTTPException(
+            status_code=429,
+            detail=f"上游限流：模型 {model_id} 的供应商密钥都在冷却中，请稍后再试",
+        )
+    return HTTPException(status_code=503, detail=detail)
+
+
+def _upstream_url(base_url: str, path: str) -> str:
+    """拼上游地址：**路径不重复**。
+
+    看板里很容易把 Base URL 填成**完整接口地址**（``https://x/v1/chat/completions``），
+    而这里还会再拼一次 ``/chat/completions`` —— 于是请求打到
+    ``/v1/chat/completions/chat/completions``，供应商直接 404
+    （2026-09-26：``deepseek-flash`` 这条就是这么配的，非流式请求全 404）。
+    所以结尾已经带了这段路径时不再追加。
+    """
+    root = str(base_url or "").strip().rstrip("/")
+    if not root:
+        return path
+    return root if root.endswith(path) else f"{root}{path}"
+
+
 def _bearer(authorization: str | None) -> str:
     if not authorization:
         return ""
@@ -105,10 +146,8 @@ async def chat_completions(
     for _attempt in range(max(1, PROXY_MAX_KEY_TRIES)):
         provider_key = llm_store.pick_provider_key(model_id)
         if provider_key is None:
-            raise HTTPException(
-                status_code=503, detail=f"模型 {model_id} 暂无可用的供应商密钥"
-            )
-        url = model["base_url"].rstrip("/") + "/chat/completions"
+            raise _no_provider_key_error(model_id)
+        url = _upstream_url(model["base_url"], "/chat/completions")
         headers = {
             "Content-Type": "application/json",
             "Accept": "text/event-stream" if wants_stream else "application/json",
@@ -208,10 +247,8 @@ async def images_generations(
     for _attempt in range(max(1, PROXY_MAX_KEY_TRIES)):
         provider_key = llm_store.pick_provider_key(model_id)
         if provider_key is None:
-            raise HTTPException(
-                status_code=503, detail=f"模型 {model_id} 暂无可用的供应商密钥"
-            )
-        url = model["base_url"].rstrip("/") + "/images/generations"
+            raise _no_provider_key_error(model_id)
+        url = _upstream_url(model["base_url"], "/images/generations")
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -261,6 +298,41 @@ async def images_generations(
 # base_url 不同根，这里按文档拼：base_url 去掉 /v1 → 拼上 /agnesapi。
 VIDEO_STATUS_PATH = "/agnesapi"
 
+# 任务 → 建它时用的那把供应商 Key。
+#
+# 真实事故（2026-09-24）：视频模型在池子里配了**两把** Key，「建任务」按「最久未用」
+# 取到 A，0.4 秒后「查结果」取到 B —— 任务是挂在 A 那个账号下的，B 去查就是
+# 404「任务不存在」（服务端日志里就是 POST 200 + 紧接着 GET 404）。
+# 所以建完任务要把「用的哪把 Key」记下来，后面轮询照用它。
+_VIDEO_TASK_KEYS: dict[str, str] = {}
+_VIDEO_TASK_KEYS_MAX = 500      # 只留最近这么多条，免得攒成内存垃圾
+
+
+def _extract_video_id(raw_text: str) -> str:
+    """从创建响应里取任务 id（各家字段名不同，逐个认）。"""
+    try:
+        data = json.loads(raw_text or "")
+    except ValueError:
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    for key in ("video_id", "videoId", "id", "task_id", "taskId"):
+        value = data.get(key)
+        if value:
+            return str(value)
+    return ""
+
+
+def _remember_task_key(video_id: str, api_key: str) -> None:
+    """记住「这个任务是哪把 Key 建的」。"""
+    if not video_id or not api_key:
+        return
+    if len(_VIDEO_TASK_KEYS) >= _VIDEO_TASK_KEYS_MAX:
+        # 简单丢掉最早的一批：任务查完就不需要了，这里只是兜底防膨胀
+        for stale in list(_VIDEO_TASK_KEYS)[: _VIDEO_TASK_KEYS_MAX // 2]:
+            _VIDEO_TASK_KEYS.pop(stale, None)
+    _VIDEO_TASK_KEYS[video_id] = api_key
+
 
 def _video_model_or_404(model_id: str) -> sqlite3.Row:
     model = llm_store.get_model(model_id)
@@ -301,7 +373,11 @@ async def videos_create(
     )
     llm_store.touch_user_key(user_key["id"])
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    status, raw_text = _video_post(model["base_url"].rstrip("/") + "/videos", model, body)
+    status, raw_text, api_key = _video_post(
+        _upstream_url(model["base_url"], "/videos"), model, body
+    )
+    # 记住这把 Key：轮询查结果必须用同一把，否则 404「任务不存在」（见 _pick_key）
+    _remember_task_key(_extract_video_id(raw_text), api_key)
     try:
         return JSONResponse(content=json.loads(raw_text or "{}"), status_code=status)
     except ValueError as exc:
@@ -335,7 +411,7 @@ def videos_status(
     url = f"{_video_origin(model['base_url'])}{VIDEO_STATUS_PATH}?{query}"
     headers = {
         "Accept": "application/json",
-        "Authorization": f"Bearer {_pick_key(model_name)}",
+        "Authorization": f"Bearer {_pick_key(model_name, video_id)}",
     }
     try:
         with urllib.request.urlopen(
@@ -376,8 +452,16 @@ async def _video_prepare(request: Request, authorization: str | None, x_user_key
     return payload, user_key, _video_model_or_404(model_id)
 
 
-def _pick_key(model_id: str) -> str:
-    """取一把可用的供应商密钥（视频生成慢，不做轮换冷却，用完就归还）。"""
+def _pick_key(model_id: str, video_id: str = "") -> str:
+    """取一把可用的供应商密钥（视频生成慢，不做轮换冷却，用完就归还）。
+
+    **查结果要认准建任务那把 Key**：池子里有多把时按「最久未用」取，建任务用 A、
+    查结果就会取到 B，而任务挂在 A 的账号下，B 查就是 404「任务不存在」。
+    所以带了 ``video_id`` 时先查 :data:`_VIDEO_TASK_KEYS` 里记的那把。
+    """
+    remembered = _VIDEO_TASK_KEYS.get(video_id or "", "")
+    if remembered and llm_store.provider_key_active(model_id, remembered):
+        return remembered
     provider_key = llm_store.pick_provider_key(model_id)
     if provider_key is None:
         raise HTTPException(status_code=503, detail=f"模型 {model_id} 暂无可用的供应商密钥")
@@ -385,8 +469,11 @@ def _pick_key(model_id: str) -> str:
     return provider_key["api_key"]
 
 
-def _video_post(url: str, model: dict, body: bytes) -> tuple[int, str]:
+def _video_post(url: str, model: dict, body: bytes) -> tuple[int, str, str]:
     """把「创建任务」转发给供应商，被限流就换池里下一把钥匙重试。
+
+    返回 ``(状态码, 响应文本, 真正建任务的那个 Key)`` —— 第三个值要给
+    :func:`_remember_task_key` 记下来，轮询查结果时用同一把。
 
     为什么这里要重试：视频是最容易撞免费档速率限制的一环，之前的做法是直接把这个
     429 抛回客户端 —— 池子里明明还有别的钥匙却没试。现在按 429 / 503 换钥匙重试，
@@ -398,10 +485,8 @@ def _video_post(url: str, model: dict, body: bytes) -> tuple[int, str]:
         provider_key = llm_store.pick_provider_key(model["model_id"])
         if provider_key is None:
             if last_status:
-                return last_status, last_text
-            raise HTTPException(
-                status_code=503, detail=f"模型 {model['model_id']} 暂无可用的供应商密钥"
-            )
+                return last_status, last_text, ""
+            raise _no_provider_key_error(model["model_id"])
         headers = {
             "Content-Type": "application/json",
             "Accept": "application/json",
@@ -425,9 +510,9 @@ def _video_post(url: str, model: dict, body: bytes) -> tuple[int, str]:
             last_status, last_text = status, text
             continue          # 换下一把钥匙再试
         llm_store.mark_provider_key_used(provider_key["id"])
-        return status, text
+        return status, text, provider_key["api_key"]
 
-    return last_status or 502, last_text
+    return last_status or 502, last_text, ""
 
 
 def _post_upstream(url: str, headers: dict, body: bytes) -> tuple[int, str]:
