@@ -61,9 +61,9 @@ def _make_clip(
 @pytest.mark.parametrize(
     ("total", "expected"),
     [
-        (4, [4]),
+        (3, [5]),           # 比最小档还短：抬到 5 秒，绝不出不足 5 秒的一段
         (5, [5]),
-        (9, [10]),          # 一段 10 秒比 [5, 4] 两段划算（少一次生成、不用合成）
+        (9, [10]),          # 一段 10 秒比 [5, 5] 两段划算（少一次生成、不用合成）
         (12, [12]),
         (13, [8, 5]),
         (20, [10, 10]),
@@ -81,9 +81,9 @@ def test_plan_segments_uses_known_durations(total, expected):
 def test_plan_segments_only_uses_supported_options():
     """每一段都必须落在供应商认的档位上，否则接口会悄悄回落到默认 5 秒。"""
     options = {int(value) for value in video_long.SEGMENT_CHOICES}
-    assert options == {4, 5, 6, 8, 10, 12}
+    assert options == {5, 6, 8, 10, 12}, "单段最短 5 秒：不再有 4 秒档"
 
-    for total in range(4, 61):
+    for total in range(5, 61):
         plan = plan_segments(total)
         assert all(value in options for value in plan), (total, plan)
         assert sum(plan) >= total, f"{total} 秒不能给少了：{plan}"
@@ -103,7 +103,7 @@ def test_plan_segments_prefers_fewer_segments():
 def test_clamp_total_keeps_request_in_range():
     assert video_long.clamp_total("30") == 30
     assert video_long.clamp_total(45) == 45
-    assert video_long.clamp_total("2") == 4, "小于最小档就按最小档"
+    assert video_long.clamp_total("2") == 5, "小于最小档就按最小档"
     assert video_long.clamp_total("999") == video_long.MAX_TOTAL_SECONDS
     assert video_long.clamp_total("") == 0
     assert video_long.clamp_total("很快") == 0
@@ -111,11 +111,11 @@ def test_clamp_total_keeps_request_in_range():
 
 # ---------------------------------------------------------------- 档位外的时长
 # 真实事故（2026-09-24）：用户要 11 秒、模型也老实传了 seconds="11"，但供应商只认
-# 4/5/6/8/10/12 —— 客户端发现「11 不合法」就**静默回落默认值 5**，成片 5.18 秒，
+# 5/6/8/10/12 —— 客户端发现「11 不合法」就**静默回落默认值 5**，成片 5.18 秒，
 # 而结果文案还写着「约 11 秒是一整段」。用户连问三次「为什么一直给我 5 秒的」。
 @pytest.mark.parametrize(
     ("wanted", "expected"),
-    [(4, [4]), (5, [5]), (6, [6]), (7, [8]), (8, [8]), (9, [10]), (10, [10]), (11, [12]), (12, [12])],
+    [(3, [5]), (4, [5]), (5, [5]), (6, [6]), (7, [8]), (8, [8]), (9, [10]), (10, [10]), (11, [12]), (12, [12])],
 )
 def test_short_duration_snaps_up_to_an_allowed_step(wanted, expected):
     """档位外的时长**就近上调**，绝不掉到默认 5 秒。"""
@@ -137,7 +137,7 @@ def test_generator_never_receives_an_off_grid_duration(wanted, expected, chained
     ("value", "expected"),
     [
         ("11", "12"), ("9", "10"), ("7", "8"), ("6", "6"),
-        ("13", "12"), ("3", "4"), ("abc", "5"), ("", "5"), (None, "5"),
+        ("13", "12"), ("3", "5"), ("4", "5"), ("abc", "5"), ("", "5"), (None, "5"),
     ],
 )
 def test_client_snaps_seconds_instead_of_falling_back_to_5(value, expected):
@@ -457,6 +457,40 @@ def test_tool_stops_on_esc(wired, tmp_path):
     assert published == ["视频-1.mp4"], "已经出的那段不能丢"
     assert "中途停止" in result.content
     assert result.artifact_paths == [str(tmp_path / "视频-1.mp4")]
+
+
+def test_partial_failure_names_the_segments_that_succeeded(monkeypatch, tmp_path):
+    """中途失败时要点名**已经成功**的段，否则模型会以为全都没出来、重拍一遍。
+
+    2026-09-25 真实会话：A 段真的出好了（卡片都挂上了），工具却整体报失败，
+    它下一句就是「上一条接口未返回视频，现在补 A」—— 那段又花了一两分钟重拍。
+    """
+    import paper_agent.services.skills.video_skills as skills
+
+    clip = tmp_path / "视频-A.mp4"
+    clip.write_bytes(b"mp4")
+    monkeypatch.setattr(
+        skills,
+        "generate_segments",
+        lambda *args, **kwargs: {
+            "segments": [{"name": "视频-A.mp4", "path": str(clip)}],
+            "merged": None,
+            "planned": [12, 12],
+            "prompts": [],
+            "meta": {},
+            "seconds": 12,
+            "error": "没能从第 1 段取到末帧，第 2 段接不上。",
+        },
+    )
+    tool = skills.GenerateVideoTool(lambda *a, **k: [], None, [])
+
+    result = tool.run(prompt="一只橘猫", seconds="24")
+
+    assert result.success is False
+    assert "视频-A.mp4" in result.error, "必须点名已经成功的那段"
+    assert "不要重拍" in result.error
+    assert result.artifact_paths == [str(clip)]
+    assert "已经真的生成成功" in result.for_model()
 
 
 def test_tool_schema_and_description_advertise_long_video():
@@ -899,6 +933,39 @@ def test_subject_is_repeated_in_every_segment(chained, tmp_path):
         assert "每一个镜头都必须与它完全相同" in call["prompt"]
 
 
+def test_layout_is_repeated_in_every_segment(chained, tmp_path):
+    """给了 layout（空间布局）就每段原样带上 —— 同一场戏的站位才不会一段一个样。
+
+    2026-09-27 用户要求：视频模型每段都是重新想象画面的，不复用同一套站位就会出现
+    「背景乱变 / 站位错乱」；所以这套描述要和 subject 一样钉死在每一段里。
+    """
+    calls: list[dict] = []
+    layout = "车厢内部：男子坐在画面右侧长椅，门在他身后，破窗在他左手边，光从右上方来"
+
+    video_long.generate_segments(
+        _fake_generator(tmp_path, calls), "整片提示词", seconds=30, layout=layout
+    )
+
+    assert len(calls) == 3
+    for call in calls:
+        assert layout in call["prompt"], "每一段都要带同一套空间布局"
+        assert "固定的空间布局" in call["prompt"]
+
+
+def test_layout_works_together_with_subject(chained, tmp_path):
+    """subject（谁在演）+ layout（在哪、怎么站）要能一起用。"""
+    calls: list[dict] = []
+    video_long.generate_segments(
+        _fake_generator(tmp_path, calls), "整片", seconds=20,
+        subject="短发白 T 恤年轻男子 / 废弃车厢",
+        layout="男子坐在画面右侧长椅，门在他身后",
+    )
+
+    for call in calls:
+        assert "短发白 T 恤年轻男子" in call["prompt"]
+        assert "门在他身后" in call["prompt"]
+
+
 def test_subject_works_together_with_storyboard(chained, tmp_path):
     """分镜（每段演什么）+ subject（谁在演）要能一起用 —— 这才是长视频的正确姿势。"""
     calls: list[dict] = []
@@ -981,6 +1048,50 @@ def test_tool_passes_subject_through(wired, tmp_path):
     assert all("废弃高铁车厢" in call["prompt"] for call in calls)
 
 
+def test_tool_passes_layout_through(wired, tmp_path):
+    """模型填了 layout 就要一路带到每一段（界面/工具层也不能丢）。"""
+    from paper_agent.services.skills.video_skills import GenerateVideoTool
+
+    calls: list[dict] = []
+    tool = GenerateVideoTool(_fake_generator(tmp_path, calls), None, [])
+
+    tool.run(prompt="恐怖短片", seconds="30", layout="男子在画面右侧，门在他身后")
+
+    assert len(calls) == 3
+    assert all("门在他身后" in call["prompt"] for call in calls)
+
+
+def test_prompt_guide_keeps_to_our_duration_steps():
+    """时长必须落在 5/6/8/10/12 上 —— 外面流行的「单段 2~4 秒」在我们的链路上跑不通。
+
+    2026-09-27：一份「AI 视频分段提示词生成器」skill 建议单段 2~4 秒，照它做会
+    「四个镜头 = 四次生成」（而 12 秒其实是打包成一次）。这里守住：要素可以学，
+    时长设定不许进来。
+    """
+    from paper_agent.services.skills.video_skills import GenerateVideoTool
+
+    text = GenerateVideoTool.description
+    assert "2~4 秒" not in text and "2-4秒" not in text, "不许出现档位外的单段时长"
+    # 镜头本身 2–12 秒都行（按剧情需要），但一段必须是 5/6/8/10/12
+    assert "2–12 秒" in text, "要说明镜头时长是灵活的"
+    assert "5 / 6 / 8 / 10 / 12" in text, "段长档位不能丢"
+    assert "空间布局" in text, "要教它先定站位"
+    assert "一个核心动作" in text, "要教它运镜平缓、单动作"
+    assert "音频" in text and "环境音" in text, "要教它顺手补音频"
+    assert "景别" in text and "画质" in text, "镜头要素清单要在"
+
+
+def test_prompt_guide_teaches_spatial_layout():
+    """模型必须知道「先定空间布局」—— 不然它根本不会去写这套关系。"""
+    from paper_agent.services.skills.video_skills import GenerateVideoTool
+
+    assert "空间布局" in GenerateVideoTool.description
+    param = next(
+        item for item in GenerateVideoTool(None).parameters if item.name == "layout"
+    )
+    assert "相对关系" in param.description
+
+
 def test_tool_passes_storyboard_and_says_so(wired, tmp_path):
     from paper_agent.services.skills.video_skills import GenerateVideoTool
 
@@ -1052,12 +1163,34 @@ def test_character_continuity_anchors_every_later_segment(chained, tmp_path):
     )
 
     assert "first_frame" not in calls[0] and "images" not in calls[0], "第 1 段没有可参考的东西"
-    for index, call in enumerate(calls[1:], 2):
-        assert "first_frame" not in call, f"第 {index} 段不该再接帧（硬切）"
-        assert len(call["images"]) == 3, f"第 {index} 段要挂上基准帧"
-        assert call["images"][0].endswith("视频-1-1"), "基准取自第 1 段"
+    for call in calls[1:]:
+        assert "first_frame" not in call, "硬切：后面几段不接帧"
+    assert len(calls[1]["images"]) == 3, "第 2 段挂第 1 段采到的基准帧"
+    assert calls[1]["images"][0].endswith("视频-1-1"), "基准取自第 1 段"
+    # 场景跟着剧情走：第 3 段多挂一张**第 2 段自己**的画面（见 _renew_references）
+    assert len(calls[2]["images"]) == 4
+    assert calls[2]["images"][-1].endswith("视频-2-1"), "补进来的是上一段的画面"
+    assert calls[2]["images"][0].endswith("视频-1-1"), "人物基准不能丢"
     assert outcome["continuity"] == "character"
-    assert outcome["reference_count"] == 3
+    # 第 3 段发的是 4 张；它出片后又补了自己的一张 → 收尾时参考集是 5 张
+    assert outcome["reference_count"] == 5
+
+
+def test_reference_set_keeps_the_hero_and_follows_the_scene():
+    """参考集上限 5 张：人物基准（最早两张）永远留着，中间那批先丢。
+
+    用户要的是「场景跟着剧情走、人还是那个人」—— 两边都不能只剩一半。
+    """
+    from paper_agent.services.video_long import _renew_references
+
+    refs: list[str] = []
+    for index in range(6):
+        refs = _renew_references(refs, [f"frame-{index}"])
+
+    assert len(refs) == 5, "供应商最多收 5 张"
+    assert refs[0] == "frame-0" and refs[1] == "frame-1", "人物 / 初始场景基准要留住"
+    assert refs[-1] == "frame-5", "最新的场景必须在里面"
+    assert _renew_references(refs, ["frame-5"]) == refs, "同一张不重复塞"
 
 
 def test_seamless_continuity_still_chains_frames(chained, tmp_path):

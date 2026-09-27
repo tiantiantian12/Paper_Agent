@@ -18,6 +18,7 @@ from paper_agent.services.video_client import (
     pick_status,
     pick_video_id,
     pick_video_url,
+    snap_seconds,
 )
 
 
@@ -470,7 +471,7 @@ def test_images_switch_to_reference_mode(artifacts, monkeypatch):
 def test_illegal_options_are_snapped_not_silently_shortened(artifacts, monkeypatch):
     """非法秒数**就近取档位**，绝不静默回落默认 5 秒（画幅照旧回落 16:9）。
 
-    以前的写法是「不在 4/5/6/8/10/12 里就换成默认 5」——于是用户要 11 秒，拿到的是
+    以前的写法是「不在 5/6/8/10/12 里就换成默认 5」——于是用户要 11 秒，拿到的是
     5.18 秒的片子，而结果文案还写着「约 11 秒」（2026-09-24 的真实事故）。
     现在档位外的一律往上取最近一档；比上限还长就按上限（更长的片子由 video_long 分段）。
     """
@@ -496,6 +497,13 @@ def test_available_requires_model_and_key(api_key, model_id):
 
 def test_options_lists_are_consistent():
     assert "5" in SECOND_OPTIONS and "16:9" in ASPECT_OPTIONS
+    assert "4" not in SECOND_OPTIONS, "单段最短 5 秒：4 秒档已经不给模型用了"
+
+
+def test_short_requests_never_below_the_minimum_step():
+    """模型把「3 秒的镜头」当一次生成时，必须被抬到 5 秒，不能真发 3 秒出去。"""
+    assert snap_seconds("3") == "5"
+    assert snap_seconds("1") == "5"
 
 
 # ---------------------------------------------------------------- 工具注册
@@ -516,6 +524,25 @@ def test_video_tool_registered_when_available(tmp_path):
 
 def test_video_tool_absent_without_capability(tmp_path):
     assert "generate_video" not in _registry_names(tmp_path, "doc", None)
+
+
+def test_model_is_told_to_pack_shots_into_one_segment():
+    """模型必须看到「镜头打包」这条：否则它会一个镜头调一次（3 秒 / 5 秒各来一发）。
+
+    用户 2026-09-25 的原话：划分要准确，几个分镜的时间线加起来**刚好等于**生成的视频
+    时长（5 秒 + 7 秒 = 12 秒），不是「一个镜头一段视频」。
+    """
+    from paper_agent.services.skills import video_skills
+    from paper_agent.services.video_client import MAX_SEGMENT_SECONDS, MIN_SEGMENT_SECONDS
+
+    tool = video_skills.GenerateVideoTool(None)
+    seconds_param = next(item for item in tool.parameters if item.name == "seconds")
+
+    assert "打包" in tool.description, "工具说明要教它把镜头打进一段"
+    assert "打包" in seconds_param.description
+    assert str(MIN_SEGMENT_SECONDS) in seconds_param.description
+    assert str(MAX_SEGMENT_SECONDS) in seconds_param.description
+    assert "打包" in video_skills.PROMPT_GUIDE
 
 
 def test_video_tool_passes_images_and_params(tmp_path):

@@ -24,6 +24,7 @@ from paper_agent.services import session_artifacts
 from paper_agent.services.background_assets import is_cancelled
 from paper_agent.services.video_client import (
     ASPECT_OPTIONS,
+    MIN_SEGMENT_SECONDS,
     SECOND_OPTIONS,
     new_artifact_path,
 )
@@ -158,7 +159,7 @@ def timeline_notes(outcome: dict, storyboard: Sequence[str]) -> str:
     # 档位被上调（11 → 12）：必须说，不然用户会以为「我要 11 秒怎么给了 12 秒」
     if requested and total and abs(total - requested) >= 1:
         notes.append(
-            f"{requested:.0f} 秒不在供应商档位（4/5/6/8/10/12）里，已按 {total:.0f} 秒生成"
+            f"{requested:.0f} 秒不在供应商档位（5/6/8/10/12）里，已按 {total:.0f} 秒生成"
         )
     if merged and count <= 1:
         notes.append(
@@ -207,7 +208,11 @@ class GenerateVideoTool(Tool):
         "根据提示词生成一段视频（文生视频 / 图生视频 / 首尾帧控制）。需要演示动画、"
         "场景片段、宣传短片或动态素材时调用；**按下面的规范写提示词**。"
         "出片要几十秒到几分钟，期间会一直等待，不要重复调用。"
-        f"\n**要长视频就把 seconds 直接写大**（最长 {MAX_TOTAL_SECONDS} 秒）：超过 "
+        f"\n**一次调用 = 一段片子**：单段只能 {MIN_SEGMENT_SECONDS}–{MAX_SEGMENT} 秒"
+        f"（供应商档位 {_SECOND_STEPS}），所以**把镜头打包进一段**，别一个镜头调一次"
+        "（拆成「3 秒 + 5 秒」两次调用，既发不出 3 秒、又白花一份额度）—— 打包与凑档位的"
+        "写法见下面的提示词规范。\n"
+        f"**要长视频就把 seconds 直接写大**（最长 {MAX_TOTAL_SECONDS} 秒）：超过 "
         f"{MAX_SEGMENT} 秒会**自动**拆成几段，并**自动锚定人物与场景** —— 先从第 1 段采几帧"
         "当「人物 / 场景基准」，之后每一段都挂上这几帧，所以人脸与场景前后一致、不会乱变。"
         f"**≤{MAX_SEGMENT} 秒就是一次生成、一段片子**（不会分段）。"
@@ -264,10 +269,14 @@ class GenerateVideoTool(Tool):
             ),
             ToolParam(
                 "seconds", "string",
-                f"时长（秒）**只能是 {_SECOND_STEPS} 这几档**（供应商限制；填别的会被就近上调："
-                f"7→8、9→10、11→12，并如实告知用户）——所以**别填 11 这种数**，想接近就填 12。"
+                f"**这一段**的时长（秒）：最短 {MIN_SEGMENT_SECONDS}、最长 {MAX_SEGMENT}，"
+                f"**只能是 {_SECOND_STEPS} 这几档**（供应商限制；填别的会被就近上调："
+                f"1–5→{MIN_SEGMENT_SECONDS}、7→8、9→10、11→12，并如实告知用户）——"
+                "所以**别填 11 这种数**，想接近就填 12。"
+                f"**镜头比 {MIN_SEGMENT_SECONDS} 秒短不要单独调一次**：把相邻镜头打包进这一段"
+                "（5+7=12、3+5=8），在时间线里写清每个镜头，让它们加起来**正好等于**你填的秒数。"
                 f"{MAX_SEGMENT + 1}–{MAX_TOTAL_SECONDS} 直接写总数（如 30），"
-                f"客户端自动分段续拍并合成一条长视频。默认 \"5\"",
+                f"客户端自动分段续拍并合成一条长视频。默认 \"{MIN_SEGMENT_SECONDS}\"",
                 required=False,
             ),
             # 用 enum 约束住：别的写法（"竖屏" / "2.39:1"）会被供应商拒或静默回落 16:9，
@@ -293,6 +302,8 @@ class GenerateVideoTool(Tool):
             ToolParam(
                 "continuity", "string",
                 "长视频怎么接：`character`（默认）每段挂参考图、人物与场景稳（段间是硬切）；"
+                "参考图**每段都会带上一段自己的画面**，所以场景跟着剧情走、人还是那个人 —— "
+                "下一段沿用上一段的背景 / 场景时不用你操心，客户端自动截那一帧。"
                 "`seamless` 首尾帧链、画面真连续但人物容易飘。默认 character",
                 required=False,
                 enum=list(CONTINUITY_CHOICES),
@@ -313,6 +324,16 @@ class GenerateVideoTool(Tool):
                 "废弃高铁车厢」。每段都会原样带上，能明显收敛「后面几段主角换脸 / 背景对不上」。"
                 "**要写可辨识的具体特征**（发色发型、痣/疤、眼镜、衣服的颜色与图案）——"
                 "「年轻男子」这种泛泛描述几乎没约束力，越具体越稳",
+                required=False,
+            ),
+            ToolParam(
+                "layout", "string",
+                "**空间布局**（长视频 / 多镜头必填）：这一场戏里人物与物件的位置关系 —— "
+                "谁在前景 / 中景 / 背景、画面的左 / 中 / 右、关键物件（门 / 桌 / 灯 / 窗）"
+                "在人物的哪一侧、光从哪来、机位朝哪。写**相对关系**（「桌子在人物右手边、"
+                "门在人物身后」），别写绝对坐标。"
+                "客户端会把它**原样带进每一个镜头**，所以同一场景的镜头不要改写它 —— "
+                "改了就会出现「沙发一会儿在左一会儿在右」；换了场景就给一套新的",
                 required=False,
             ),
             ToolParam(
@@ -499,6 +520,7 @@ class GenerateVideoTool(Tool):
         seed: Any = None,
         shots: Any = None,
         subject: str = "",
+        layout: str = "",
         anchor: str = "",
         continuity: str = "",
         continue_from: str = "",
@@ -606,6 +628,7 @@ class GenerateVideoTool(Tool):
             on_segment=self._publish,
             shots=storyboard,
             subject=(subject or "").strip(),
+            layout=(layout or "").strip(),
             continuity=continuity_mode,
             anchor_frames=anchor_frames,
             is_stopped=self._stopped,
@@ -617,10 +640,19 @@ class GenerateVideoTool(Tool):
         if merged:
             paths.append(str(merged["path"]))
         if outcome.get("error"):
-            # 中途失败（比如取不到上一段末帧）：把已经出的段交出去，别白跑
-            return ToolResult(
-                success=False, error=str(outcome["error"]), artifact_paths=paths
-            )
+            # 中途失败（比如取不到上一段末帧）：把已经出的段交出去，别白跑。
+            #
+            # **必须点名已经成功的段**：只回一句「失败了」，模型会以为这几段全都没出来，
+            # 转头重拍一遍 —— 2026-09-25 真实会话：A 段真的出好了（卡片都挂上了），
+            # 工具却整体报失败，它下一句就是「上一条接口未返回视频，现在补 A」。
+            detail = str(outcome["error"])
+            if segments:
+                done = "、".join(
+                    str(item.get("name") or Path(str(item.get("path", ""))).name)
+                    for item in segments
+                )
+                detail += f"\n（已经生成成功的段：{done} —— **这些不要重拍**，只补剩下的。）"
+            return ToolResult(success=False, error=detail, artifact_paths=paths)
         if not segments:
             return ToolResult(success=False, error="文生视频接口未返回视频")
 

@@ -35,9 +35,11 @@ from paper_agent.services.video_frames import last_frame_data_url, sample_frames
 from paper_agent.services.video_merge import VideoMergeError, merge_videos
 
 # 供应商允许的单段时长档位（与 video_client.SECOND_OPTIONS 一致）
-SEGMENT_CHOICES = (12, 10, 8, 6, 5, 4)
+# **没有 4 秒**：单段最短 5 秒，比这更短的镜头要跟相邻镜头打包成一段再发
+# （见 skills/video_prompt.py 的 PACKING_RULE）。
+SEGMENT_CHOICES = (12, 10, 8, 6, 5)
 MAX_SEGMENT = 12
-MIN_SEGMENT = 4
+MIN_SEGMENT = 5
 
 # 只有一条提示词却要分几段时，给后面几段补的话。
 #
@@ -63,6 +65,12 @@ IDENTITY_HINT = (
     "同一个场景、同样的道具、光线与色调。不要引入新人物，不要更换场景，不要改变画面风格。"
 )
 SUBJECT_LINE = "\n\n固定的主体与场景（每一个镜头都必须与它完全相同）：{subject}"
+# 空间布局：**同一场戏的每一个镜头都用同一套站位**（2026-09-27）。
+#
+# 光写「谁在哪」不够：视频模型每个镜头都是重新想象画面的，手里没有"上一个镜头的坐标"，
+# 同一间屋子里门 / 座椅 / 人物的左右关系会一段一个样 —— 用户看到的就是「背景乱变 /
+# 站位错乱」。所以先把布局写死，之后每段原样带上；换了场景就换一套新的（由调用方给）。
+LAYOUT_LINE = "\n\n固定的空间布局（同一个场景的每一个镜头都必须与它一致）：{layout}"
 
 # 把**前面几段演了什么**告诉这一段。
 #
@@ -93,6 +101,9 @@ MAX_PROMPT_CHARS = 2500
 #
 #   character（默认）：**参考图锚定**。第 1 段出片后从它身上采几帧当「人物 + 场景基准」，
 #       之后每一段都用 reference 模式挂上这几帧 —— 人物与场景不乱变，段间是**硬切**。
+#       参考集**每段都会更新**（见 :func:`_renew_references`）：人物基准（最早两张）
+#       一直留着，另外再补一张**上一段自己的画面**，场景就跟着剧情往前走 ——
+#       只锚第 1 段的话，后面换了场景（车厢外 → 车厢内）模型还是在按老场景画。
 #       为什么默认是它：实测（`data/artifacts/_eval/`）首尾帧链只把**一帧**传给下一段，
 #       那一帧是背影/远景时下一段拿不到人脸信息、只能自己编（这就是「换脸」的成因）；
 #       而每段都挂参考图时，人物的脸与场景在四段里都守住了。
@@ -120,6 +131,9 @@ def plan_segments(total: int) -> list[int]:
     所以 9 秒给 ``[10]``（一段，多 1 秒）而不是 ``[5, 4]``（两段、刚刚好）——
     为了省那 1 秒多跑一次生成不划算。只有一段塞不下（超过 12 秒）才往下分段。
 
+    比最小档还短的请求（模型把「3 秒的镜头」直接当一次生成）会被抬到最小档：
+    ``plan_segments(3)`` → ``[5]``，绝不会发出一段不足 5 秒的请求。
+
     Examples:
         >>> plan_segments(5)
         [5]
@@ -130,7 +144,7 @@ def plan_segments(total: int) -> list[int]:
         >>> plan_segments(30)
         [10, 10, 10]
     """
-    wanted = max(int(total or 0), 1)
+    wanted = max(int(total or 0), MIN_SEGMENT)
     fewest = max(1, -(-wanted // MAX_SEGMENT))
     for count in range(fewest, wanted // MIN_SEGMENT + 1):
         # 同样的段数里，从「刚好等于」往上找，先撞上的就是超得最少的那种
@@ -173,6 +187,32 @@ def _pairs() -> list[tuple[int, int]]:
     ]
 
 
+def _renew_references(
+    refs: Sequence[str],
+    frames: Sequence[str],
+    limit: int = MAX_REFERENCE_IMAGES,
+) -> list[str]:
+    """把「刚出这一段」的画面并进参考集：人物基准保留，场景跟着剧情往前走。
+
+    以前只在**第 1 段**采一次，后面几段的场景换了（从车厢外走到车厢内、从白天到
+    夜里），参考的还是第 1 段那几张 —— 于是模型按老场景画，用户看到「背景怎么又
+    回到开头那样」。现在每段出片后补一张**这一段**的画面：
+
+    * **最早那两张留着** —— 那是人物正脸 / 初始场景的基准，丢了就会「换脸」；
+    * **最新的几张跟着剧情更新** —— 场景由最近这几段决定，前后才连得上；
+    * 超过供应商上限（5 张）就丢中间那批：既不是人物基准，也不是当前场景。
+    """
+    merged = [str(item) for item in refs if item]
+    for frame in frames or ():
+        text = str(frame)
+        if text and text not in merged:
+            merged.append(text)
+    if len(merged) <= limit:
+        return merged
+    keep_head = min(2, limit)          # 人物 / 初始场景：永远留着
+    return merged[:keep_head] + merged[len(merged) - (limit - keep_head):]
+
+
 def segment_prompts(
     prompt: str,
     shots: Sequence[str] | None,
@@ -190,6 +230,7 @@ def plan_prompts(
     count: int,
     subject: str = "",
     segment_seconds: Sequence[int] | None = None,
+    layout: str = "",
 ) -> tuple[list[str], dict[str, Any]]:
     """每一段发什么提示词 + **这次是怎么来的**（结果备注要如实说，别悄悄丢内容）。
 
@@ -251,6 +292,10 @@ def plan_prompts(
 
     fixed = (subject or "").strip()
     fixed_block = SUBJECT_LINE.format(subject=fixed) if fixed else ""
+    # 空间布局：和 subject 一样的「固定块」，每个镜头原样带（见 LAYOUT_LINE）
+    layout_text = (layout or "").strip()
+    if layout_text:
+        fixed_block += LAYOUT_LINE.format(layout=layout_text)
     texts = [
         _append_within(
             body,
@@ -420,6 +465,7 @@ def generate_segments(
     on_segment: Callable[[dict[str, Any], int, int], None] | None = None,
     shots: Sequence[str] | None = None,
     subject: str = "",
+    layout: str = "",
     continuity: str = CONTINUITY_CHARACTER,
     anchor_frames: Sequence[str] | None = None,
     frame_reader: Callable[[str], str] | None = None,
@@ -438,6 +484,8 @@ def generate_segments(
         shots: 分镜：每段一条提示词（按顺序）。不传就整片复用同一条 —— 那会让每段
             把整片画面重演一遍，见 :func:`segment_prompts`。
         subject: 主角与场景的固定措辞，每段原样带上（收敛「后面几段换脸 / 换背景」）。
+        layout: **空间布局**（人物 / 物件在哪、光从哪来、机位朝哪），每段原样带上 ——
+            收敛「同一个场景里站位与背景一段一个样」；换场景时调用方换一套新的。
         continuity: ``character``（默认）每段挂参考图、人物与场景不乱变（段间硬切）；
             ``seamless`` 首尾帧链、画面真连续但人物靠单帧锚（容易飘）。
         anchor_frames: 现成的「人物 / 场景基准」图（data URL 列表）；不传则第 1 段出片后
@@ -451,7 +499,7 @@ def generate_segments(
         ``{"planned", "prompts", "segments", "merged", "merge_error", "stopped", "seconds"}``
     """
     requested = clamp_total(seconds) or MAX_SEGMENT
-    # **一定**要过 plan_segments：供应商只认 4/5/6/8/10/12 这几档，把 11 秒原样发下去，
+    # **一定**要过 plan_segments：供应商只认 5/6/8/10/12 这几档，把 11 秒原样发下去，
     # 客户端只能回落默认值 5 秒 —— 「要 11 秒却一直给 5 秒」就是这么来的（2026-09-24）。
     # plan_segments 会就近上调（7→8、9→10、11→12），片长只多不少。
     planned = plan_segments(requested)
@@ -459,7 +507,9 @@ def generate_segments(
     count = len(planned)
     # 按时间线（或分镜）决定每段发什么；``meta`` 里记着这次是怎么切的，
     # 结果备注要如实告诉用户 / 模型（见 video_skills 的备注）
-    texts, meta = plan_prompts(prompt, shots, count, subject, segment_seconds=planned)
+    texts, meta = plan_prompts(
+        prompt, shots, count, subject, segment_seconds=planned, layout=layout
+    )
     # 记下「用户到底要了几秒」：档位被上调时，结果备注要如实说（不许悄悄改）
     meta["requested"] = requested
     seed_value = resolve_seed(seed)
@@ -468,6 +518,9 @@ def generate_segments(
     anchored = (continuity or CONTINUITY_CHARACTER) != CONTINUITY_SEAMLESS
     # 「人物 / 场景基准」：调用方给的优先；没给就等第 1 段出片后从它身上采
     references = [str(item) for item in (anchor_frames or []) if item][:MAX_REFERENCE_IMAGES]
+    # 用户没指定基准时，参考集由我们**自己维护**（每段会补一张新画面）；
+    # 给了 anchor 就一直用它 —— 那是用户明确指定的主角，不能被中途的画面顶掉
+    auto_references = anchored and not references
     attached = [str(item) for item in (images or []) if item]
 
     segments: list[dict[str, Any]] = []
@@ -558,15 +611,16 @@ def generate_segments(
         if produced:
             previous = str((produced[-1] or {}).get("path", "")) or previous
 
-        if anchored and not references and segments and index == 1:
-            # 第 1 段出来了：从它身上采几帧当整条片子的「人物 / 场景基准」——
-            # 用户什么都不用给，后面每一段都靠这几帧把人脸和场景钉住
+        # 「人物 / 场景基准」：第 1 段出片后从它身上采几帧，之后每段再补一张
+        # **这一段自己的画面** —— 场景跟着剧情走（见 _renew_references）。
+        # 用户自己给过 anchor 时不覆盖（那是他指定的「这就是主角」）。
+        if anchored and auto_references and produced:
             try:
-                references = [
-                    str(item) for item in read_samples(str(segments[0]["path"]))
-                ][:MAX_REFERENCE_IMAGES]
+                fresh = [str(item) for item in read_samples(str(segments[-1]["path"]))]
             except Exception:      # noqa: BLE001 - 采样失败就退回首尾帧链
-                references = []
+                fresh = []
+            # 第 1 段：整份基准都从它来；后面每段只补一张，别把人物基准挤掉
+            references = _renew_references(references, fresh if index == 1 else fresh[:1])
 
     stopped = stopped or _stopped(is_stopped)
 

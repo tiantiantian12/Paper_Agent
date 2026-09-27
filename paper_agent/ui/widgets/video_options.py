@@ -20,7 +20,7 @@ from paper_agent.ui.widgets.model_combo import MenuButton
 
 
 class VideoOptionsButton(MenuButton):
-    """视频参数选择：时长（4–12 秒）+ 画幅（分辨率固定 720P）。"""
+    """视频参数选择：时长（5–12 秒）+ 画幅（分辨率固定 720P）。"""
 
     def __init__(
         self,

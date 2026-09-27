@@ -90,10 +90,9 @@ IMAGE_RETRY_HINT = (
     "就直接说明失败原因，**不要再给出任何文件名或本地路径**。"
 )
 IMAGE_MISSING_WARNING = (
-    "---\n\n"
-    "> ⚠️ **事实校验**：以上回复声称图片已生成，但本轮实际没有产出任何图片 —— "
-    "模型只是描述了过程，并没有真正调用生图工具（文中文件名是虚构的）。\n"
-    "> 请再发一次「生成图片」，或把提示词写得更简单直接。"
+    "> ⚠️ **事实校验**：下面这段声称图片已生成，但本轮实际没有产出任何图片 —— "
+    "模型只是描述了过程，并没有真正调用生图工具（被划掉的文件名都是虚构的）。\n"
+    "> 请再发一次「生成图片」，或把提示词写得更简单直接。\n\n---\n\n"
 )
 
 # ---------------------------------------------------------------- 视频事实校验
@@ -160,16 +159,23 @@ VIDEO_RETRY_HINT = (
     "就直接说明失败原因，**不要再给出任何文件名或本地路径**。"
 )
 VIDEO_MISSING_WARNING = (
-    "---\n\n"
-    "> ⚠️ **事实校验**：以上回复声称视频已生成 / 已合成，但本轮实际没有产出任何视频 —— "
-    "模型只是描述了过程，并没有真正生成成功（文中文件名是虚构的）。\n"
-    "> 请再发一次，或把提示词写得更简单直接。"
+    "> ⚠️ **事实校验**：下面这段声称视频已生成 / 已合成，但本轮实际没有产出任何视频 —— "
+    "模型只是描述了过程，并没有真正调用成功（被划掉的文件名都是虚构的）。\n"
+    "> 请再发一次，或把提示词写得更简单直接。\n\n---\n\n"
 )
 
 # 单次请求的失败重试：能在这一层救回来，就不必让上层把整轮清空重来。
 # 限流要等额度窗口，比网络抖动允许更多次。
 # 支持「先落文件、再分段追加」的产物工具（输出预算不够时的正解）
 SPLITTABLE_TOOLS = {"create_docx", "create_xlsx", "create_csv", "create_pdf"}
+
+# 「声称做了、实际没做」时最多补几轮。
+#
+# 只补一轮不够：小模型第一轮常常继续「演」（再写一遍完成汇报、再编一次名字），
+# 第二轮才真的去调工具（2026-09-25 真实会话：连续两轮编出 视频-20260925-012703.mp4
+# 这种名字，还用表格列出「真实产出」，一个工具都没调）。补到第三轮意义不大 ——
+# 那就不是「忘了调」，是它做不了，直接把话挑明给用户。
+CLAIM_RETRY_ROUNDS = 2
 
 STEP_RETRY = 3               # 网络 / 超时类：最多再试 2 次
 RATE_LIMIT_RETRY = 4         # 限流类：最多再试 3 次
@@ -211,6 +217,36 @@ def looks_degenerate(text: str) -> bool:
         if len(set(recent)) == 1:
             return True
     return False
+
+
+def observation_text(name: str, text: str, seq: int) -> str:
+    """给工具返回套一层「身份说明」再回灌给模型。
+
+    小模型会把 ``role=tool`` 的观察**读成新输入**：2026-09-26 真实会话里，工具返回
+    中提到一张 PNG 的尺寸，它接了一句「收到章鱼哥新图，我先替换 anchor 再重新生成
+    段 1」—— 其实根本没来新图，那是上一步的素材和上一次调用的返回。所以每条观察
+    都写明：**这是哪一次调用的返回**，不是用户新发的、也不是新收到的素材。
+    """
+    return (
+        f"[{name} · 第 {seq} 次工具调用的结果]"
+        "（这是**上一次调用**的返回，不是用户新发的内容，也不是新收到的素材；"
+        "不要据此认为又来了新图 / 新文件；刚做过的事不要再做一遍）\n"
+        + str(text or "")
+    )
+
+
+def missing_names(text: str, name_re: Any) -> list[str]:
+    """正文里提到、但磁盘上并不存在的产物名（模型「预测」出来的那些）。
+
+    名字里带**生成时刻**，模型不可能预知 —— 出现这种名字基本等于它在编。
+    """
+    if name_re is None:
+        return []
+    return [
+        name
+        for name in dict.fromkeys(name_re.findall(text or ""))
+        if session_artifacts.find_named(name) is None
+    ]
 
 
 def message_text(message: dict) -> str:
@@ -435,6 +471,7 @@ class AgentOrchestrator:
         self._is_stopped = is_stopped or (lambda: False)
         self._image_generator = image_generator
         self._noted_drop = False      # 是否已提示「推理参数被服务端拒绝」
+        self._tool_seq = 0            # 本轮第几次工具调用（写进观察，帮模型分辨先后）
         self._emit: Callable[[str, str], None] = lambda *_: None
 
     # ---------------------------------------------------------------- 入口
@@ -576,6 +613,7 @@ class AgentOrchestrator:
             retry_hint=IMAGE_RETRY_HINT,
             warning=IMAGE_MISSING_WARNING,
             name_re=IMAGE_NAME_RE,
+            suffixes=IMAGE_SUFFIXES,
         )
 
     def _verify_video_claim(
@@ -600,6 +638,7 @@ class AgentOrchestrator:
             retry_hint=VIDEO_RETRY_HINT,
             warning=VIDEO_MISSING_WARNING,
             name_re=VIDEO_NAME_RE,
+            suffixes=VIDEO_SUFFIXES,
         )
 
     def _has_video_tool(self) -> bool:
@@ -624,6 +663,7 @@ class AgentOrchestrator:
         retry_hint: str,
         warning: str,
         name_re: Any = None,
+        suffixes: set[str] | None = None,
     ) -> tuple[str, str, list[dict]]:
         """「声称做了、实际没做」的通用纠偏（图片与视频各调一次）。
 
@@ -646,25 +686,84 @@ class AgentOrchestrator:
         if not claim_re.search(final or ""):
             return final, cleaned, artifacts
 
-        retry = self._react(
-            [*working, {"role": "user", "content": retry_hint}], tools, temperature
-        )
-        retry_cleaned, retry_artifacts = extract_artifact_blocks(
-            retry or "", self._image_generator
-        )
-        for artifact in retry_artifacts:
-            self._remember_artifact(artifact.get("name", ""), artifact.get("path", ""))
-            self._emit(ARTIFACT, json.dumps(artifact, ensure_ascii=False))
-        if (retry or "").strip():
-            final, cleaned, artifacts = retry, retry_cleaned, retry_artifacts
-            if retry_artifacts:
-                self._emit(CONTENT_FINAL, retry_cleaned)
+        # 补轮次的提示要带上**它自己编的名字**和**真实存在的文件**：
+        # 只说「你没调工具」，它下一轮照样再编一个（名字是照抄工具返回格式的）。
+        pending = list(working)
+        for _attempt in range(CLAIM_RETRY_ROUNDS):
+            hint = retry_hint + self._claim_context(final, name_re, suffixes)
+            # _react 会把 assistant / tool 消息回写进 pending，所以下一轮天然带着
+            # 「上一轮它又编了什么」的完整上下文，不必自己再拼一遍
+            pending = [*pending, {"role": "user", "content": hint}]
+            retry = self._react(pending, tools, temperature)
+            retry_cleaned, retry_artifacts = extract_artifact_blocks(
+                retry or "", self._image_generator
+            )
+            for artifact in retry_artifacts:
+                self._remember_artifact(artifact.get("name", ""), artifact.get("path", ""))
+                self._emit(ARTIFACT, json.dumps(artifact, ensure_ascii=False))
+            if (retry or "").strip():
+                final, cleaned, artifacts = retry, retry_cleaned, retry_artifacts
+                if retry_artifacts:
+                    self._emit(CONTENT_FINAL, retry_cleaned)
+            if produced():
+                return final, cleaned, artifacts
 
-        if not produced():
-            cleaned = f"{cleaned.rstrip()}\n\n{warning}"
-            self._emit(CONTENT_FINAL, cleaned)
-            final = cleaned
-        return final, cleaned, artifacts
+        # 补了两轮仍然没有产物：把正文里那些不存在的名字**划掉**、警示放最前面
+        # —— 只在末尾追加小字，用户看到的还是那张「真实产出」的表，照样白等白找。
+        cleaned = self._strike_missing_names(cleaned, name_re)
+        cleaned = f"{warning}\n{cleaned.strip()}"
+        self._emit(CONTENT_FINAL, cleaned)
+        return cleaned, cleaned, artifacts
+
+    def _claim_context(self, text: str, name_re: Any, suffixes: set[str] | None) -> str:
+        """给纠偏提示补上两项**事实**：它编的名字，以及真实存在的文件。
+
+        光说「你没调用工具」不够 —— 模型下一轮会照着工具返回的格式**再编一个**名字。
+        把「这几个名字磁盘上根本没有」和「现在真实存在的只有这些」摆进去，
+        它才有得对照（也省掉一次 list_artifacts 往返）。
+        """
+        parts: list[str] = []
+        fakes = missing_names(text, name_re)
+        if fakes:
+            parts.append(
+                "\n你上一条里提到的 " + "、".join(fakes)
+                + " **在磁盘上根本不存在**（文件名带生成时刻，你不可能预知）。"
+            )
+        if suffixes:
+            real = self._existing_names(suffixes)
+            if real:
+                parts.append(
+                    "\n本会话工作区里**真实存在**的同类文件只有这些："
+                    + "、".join(real)
+                    + "。要用它们就照抄这里的名字。"
+                )
+            else:
+                parts.append(
+                    "\n本会话工作区里**一个同类文件都没有** —— "
+                    "所以别再说「已生成」，要么真的调用工具，要么如实说做不到。"
+                )
+        return "".join(parts)
+
+    def _existing_names(self, suffixes: set[str], limit: int = 12) -> list[str]:
+        """本会话工作区里真的存在的同类文件名（最近 ``limit`` 个）。"""
+        try:
+            paths = session_artifacts.candidates([])
+        except Exception:      # noqa: BLE001 - 扫不动就当不知道，别拖垮纠偏
+            return []
+        names = [Path(str(item)).name for item in paths
+                 if Path(str(item)).suffix.lower() in suffixes]
+        return names[-limit:]
+
+    def _strike_missing_names(self, text: str, name_re: Any) -> str:
+        """把正文里不存在的文件名**划掉**（用户一眼看出哪些是编的）。
+
+        只在末尾追加一句说明不管用：模型那张「真实产出（工具返回）」的表格照样在最
+        显眼的位置，用户还是照着不存在的名字去找文件。
+        """
+        result = text or ""
+        for name in missing_names(result, name_re):
+            result = result.replace(name, f"~~{name}~~（文件不存在）")
+        return result
 
     def _append_name_fix(
         self,
@@ -687,10 +786,7 @@ class AgentOrchestrator:
             return final, cleaned, artifacts
         known = {Path(path).name for _name, path in produced}
         missing = [
-            name
-            for name in dict.fromkeys(name_re.findall(cleaned))
-            if name not in known
-            and session_artifacts.find_named(name) is None
+            name for name in missing_names(cleaned, name_re) if name not in known
         ]
         if not missing:
             return final, cleaned, artifacts
@@ -699,11 +795,13 @@ class AgentOrchestrator:
             "\n\n---\n\n"
             "> ⚠️ **文件名校正**：上面提到的 "
             + "、".join(f"`{name}`" for name in missing)
-            + " 并不存在（那是推测出来的名字 —— 文件名里带生成时刻，无法预知）。\n"
+            + " 并不存在（那是推测出来的名字 —— 文件名里带生成时刻，无法预知），"
+            "正文里已划掉。\n"
             f"> **本轮真实产出的是 {real}**：请以产物卡片 / 生成的文件清单为准。"
             "**不需要重拍**，只是名字写错了而已。"
         )
-        cleaned = f"{cleaned.rstrip()}{note}"
+        # 先划掉再补说明：不然那张写着不存在名字的表格还摆在最显眼的位置
+        cleaned = f"{self._strike_missing_names(cleaned, name_re).rstrip()}{note}"
         self._emit(CONTENT_FINAL, cleaned)
         return final, cleaned, artifacts
 
@@ -988,6 +1086,7 @@ class AgentOrchestrator:
             # 执行工具并把结果作为观察回灌
             for call in calls:
                 name = call.get("name", "")
+                self._tool_seq += 1
                 # 不要用 `or "{}"` 兜底：那会把「参数一个字都没到」伪装成
                 # 「模型传了空对象」，两种情况要分开处理（见 _parse_args）
                 raw_args = call.get("arguments") or ""
@@ -1013,7 +1112,7 @@ class AgentOrchestrator:
                             "role": "tool",
                             "tool_call_id": call.get("id", ""),
                             "name": name,
-                            "content": message,
+                            "content": observation_text(name, message, self._tool_seq),
                         }
                     )
                     continue
@@ -1079,7 +1178,7 @@ class AgentOrchestrator:
                         "role": "tool",
                         "tool_call_id": call.get("id", ""),
                         "name": name,
-                        "content": result.for_model(),
+                        "content": observation_text(name, result.for_model(), self._tool_seq),
                     }
                 )
 

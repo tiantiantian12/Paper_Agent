@@ -38,10 +38,15 @@ VIDEO_POLL_TIMEOUT = 900         # 最多等 15 分钟
 SUBMIT_RETRY_DELAYS = (20.0, 45.0)
 VIDEO_SIZE = "720P"              # Flash 只支持 720P
 ASPECT_OPTIONS = ("16:9", "9:16", "4:3", "1:1", "3:4", "21:9")
-SECOND_OPTIONS = ("4", "5", "6", "8", "10", "12")
+# 供应商只认这几档时长（**最短 5 秒、最长 12 秒**）：不在档位上的一律就近上调，
+# 写进工具说明让模型自己就能凑对（见 skills/video_prompt.py 的 PACKING_RULE）。
+SECOND_OPTIONS = ("5", "6", "8", "10", "12")
 # 单次请求的上限就是 SECOND_OPTIONS 里最大的那个；再长只能「分段续接 + 合成」，
 # 见 paper_agent/services/video_long.py
 MAX_SEGMENT_SECONDS = 12
+# 单次请求的下限：比它短的镜头不能单独出一段（3 秒的镜头要跟别的镜头打包，
+# 凑成 5 / 6 / 8 / 10 / 12 秒再发）
+MIN_SEGMENT_SECONDS = 5
 # 一次长视频最多拍这么久：5 段、每段一两分钟，再长用户等不起、额度也顶不住
 MAX_TOTAL_SECONDS = 60
 DEFAULT_SECONDS = "5"
@@ -251,7 +256,7 @@ def _walk(node: Any):
 
 
 def snap_seconds(value: Any) -> str:
-    """把请求时长收进供应商允许的档位（4/5/6/8/10/12）：**就近上调**。
+    """把请求时长收进供应商允许的档位（5/6/8/10/12）：**就近上调**。
 
     **绝不静默回落默认值 5 秒**。真实事故（2026-09-24）：用户要 11 秒，模型也老实传了
     ``seconds="11"``，这里发现「11 不合法」就换成默认的 5 —— 成片 5.18 秒，而结果文案
@@ -265,7 +270,7 @@ def snap_seconds(value: Any) -> str:
         return DEFAULT_SECONDS
     if wanted <= 0:
         return DEFAULT_SECONDS
-    for option in SECOND_OPTIONS:      # 升序：4, 5, 6, 8, 10, 12
+    for option in SECOND_OPTIONS:      # 升序：5, 6, 8, 10, 12
         if float(option) >= wanted:
             return option
     return SECOND_OPTIONS[-1]

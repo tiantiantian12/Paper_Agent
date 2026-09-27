@@ -167,6 +167,80 @@ def test_tool_failure_is_not_treated_as_produced(tmp_path):
     assert "事实校验" in _finals(events), "失败了还说「已生成」，必须纠正"
 
 
+def test_observations_are_marked_as_previous_call_results(tmp_path):
+    """工具返回必须写明「这是上一次调用的返回」——否则模型会把观察当成新素材。
+
+    2026-09-26 真实会话：工具返回里提到一张 PNG 的尺寸，它接了一句「收到章鱼哥新图，
+    我先替换 anchor 再重新生成段 1」—— 其实没有新图，那是上一步的素材。
+    """
+    produced: list[str] = []
+    client = FakeClient(
+        [
+            [_call("generate_video", {"prompt": "章鱼哥", "seconds": "5"})],
+            [_text("已生成，见上方卡片。")],
+        ]
+    )
+    engine = _engine(client, _VideoTool(produced, tmp_path=tmp_path), tmp_path)
+
+    _run(engine)
+
+    tool_messages = [
+        item for item in client.calls[-1] if item.get("role") == "tool"
+    ]
+    assert tool_messages, "工具返回应该回灌给模型"
+    assert "次工具调用的结果" in tool_messages[0]["content"]
+    assert "不是新收到的素材" in tool_messages[0]["content"]
+
+
+def test_observation_text_keeps_the_original_result():
+    from paper_agent.services.agents.engine import observation_text
+
+    text = observation_text("generate_video", "已生成 1 段视频：视频-real.mp4", 2)
+
+    assert "第 2 次工具调用的结果" in text
+    assert "已生成 1 段视频：视频-real.mp4" in text, "原始返回不能丢"
+
+
+def test_fabricated_names_are_struck_out(tmp_path):
+    """补两轮还是只说不做：正文里不存在的名字要被**划掉**。
+
+    只在末尾追加一句说明不管用 —— 那张写着「真实产出（工具返回）」的表还摆在最显眼
+    的位置，用户照样照着不存在的名字去找文件（2026-09-25 真实会话）。
+    """
+    produced: list[str] = []
+    client = FakeClient([[_text(FAKE_CLAIM)], [_text(FAKE_CLAIM)], [_text(FAKE_CLAIM)]])
+    engine = _engine(client, _VideoTool(produced, tmp_path=tmp_path), tmp_path)
+
+    final = _finals(_run(engine))
+
+    assert "~~视频-20260923-034426.mp4~~" in final, "编出来的名字要划掉"
+    assert "文件不存在" in final
+
+
+def test_retry_hint_names_the_fabricated_files(tmp_path):
+    """纠偏提示要点名它编的那些名字：只说「你没调工具」，它下一轮照样再编一个。"""
+    produced: list[str] = []
+    client = FakeClient([[_text(FAKE_CLAIM)], [_text("好的，我再试一次。")]])
+    engine = _engine(client, _VideoTool(produced, tmp_path=tmp_path), tmp_path)
+
+    _run(engine)
+
+    hint = client.calls[1][-1]["content"]
+    assert "视频-20260923-034426.mp4" in hint, "要点名它编的文件"
+    assert "根本不存在" in hint
+
+
+def test_guard_stops_after_two_retries(tmp_path):
+    """补两轮还是没产物就收手：第三轮多半还是演，只会让用户多等一两分钟。"""
+    produced: list[str] = []
+    client = FakeClient([[_text(FAKE_CLAIM)]] * 5)
+    engine = _engine(client, _VideoTool(produced, tmp_path=tmp_path), tmp_path)
+
+    _run(engine)
+
+    assert len(client.calls) == 3, "初始 1 轮 + 补 2 轮"
+
+
 def test_no_video_tool_means_no_guard(tmp_path):
     """没配视频模型时不折腾：让模型自己解释（否则用户会莫名多等一轮）。"""
     from paper_agent.services.agents.engine import AgentOrchestrator
