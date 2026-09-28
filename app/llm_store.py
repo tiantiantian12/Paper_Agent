@@ -108,6 +108,11 @@ def seed_models() -> None:
             # 配置写错了不能拖垮整个服务：跳过这一个，日志里说清楚
             print(f"[llm] 跳过模型 {model_id}：{exc}", flush=True)
             continue
+        except sqlite3.IntegrityError:
+            # API 与看板是两个进程，同时启动会一起播种：这边刚查完「库里没有」，
+            # 那边已经插进去了，再插就撞 llm_models.model_id 的 UNIQUE。
+            # 撞了说明已经有了（正是「幂等」想要的结果），继续往下补密钥即可。
+            print(f"[llm] 模型 {model_id} 已由另一个进程播种，跳过", flush=True)
         for api_key in item.get("api_keys") or []:
             if not provider_key_exists(model_id, api_key):
                 add_provider_key(model_id, api_key, "内置密钥")
