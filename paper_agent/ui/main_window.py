@@ -1389,6 +1389,21 @@ class MainWindow(FramelessMixin, QWidget):
                 f"{text}（该服务端不接受这个推理强度参数，可在「自定义模型 → "
                 "推理强度参数」里改为「不发送」）"
             )
+        if "http 400" in lowered:
+            # 400 是**请求本身**被拒（不是限流）：重试、换 Key 都救不回来。
+            # 视频最常见的就是素材不被接受（参考图张数 / 格式 / 请求体大小），
+            # 把排查方向直接写出来，免得一直显示「接口限流」白白重试。
+            hint = "请求被服务端拒绝了：参数或素材不被接受"
+            if "video" in lowered or "视频" in text:
+                hint += "（视频的话先减少参考图张数、或换小一点的图再试）"
+            return f"{text}（{hint}）"
+        if "size limit" in lowered or "too large" in lowered or "请求体" in text:
+            # 参考图是 base64 内联的：几张原图叠起来很容易撑爆请求体上限。
+            # 这不是限流（等一会儿、换 Key 都没用），必须少给几张 / 给小一点的图。
+            return (
+                f"{text}（请求体太大：参考图是按 Base64 内联进请求里的，"
+                "请减少参考图张数（先试 1–2 张）或换小一点的图）"
+            )
         if "http 5" in lowered:
             return f"{text}（服务侧异常，稍后通常会自动恢复）"
         if "无法连接" in text or "timed out" in lowered or "超时" in text:

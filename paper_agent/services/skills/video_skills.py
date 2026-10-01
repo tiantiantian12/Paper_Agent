@@ -29,9 +29,11 @@ from paper_agent.services.video_client import (
     new_artifact_path,
 )
 from paper_agent.services.video_frames import (
+    MAX_INLINE_BYTES,
     image_data_url,
     last_frame_data_url,
     missing_ffmpeg_hint,
+    per_image_budget,
     sample_frames,
 )
 from paper_agent.services.video_long import (
@@ -408,8 +410,11 @@ class GenerateVideoTool(Tool):
         frames: list[str] = []
         labels: list[str] = []
         kinds: list[str] = []
+        # 几张图一起发要按张数分摊体积预算：各压各的、每张都压到 900KB 的上限，
+        # 三张叠起来 base64 之后就 3MB 了 —— 服务端直接回「Request size limit exceeded」
+        budget = per_image_budget(len(names))
         for name in names:
-            items, label, kind = self._one_anchor(name)
+            items, label, kind = self._one_anchor(name, budget)
             if not items:
                 # 有一个认不出来就明确报错：悄悄少给基准，出来的片子会莫名其妙地不像
                 if kind == "missing":
@@ -447,15 +452,21 @@ class GenerateVideoTool(Tool):
             )
         return frames, note
 
-    def _one_anchor(self, name: str) -> tuple[list[str], str, str]:
-        """解析一项 anchor，返回 ``(图列表, 说明用名字, 类型)``；类型见下面的字面量。"""
+    def _one_anchor(
+        self, name: str, max_bytes: int | None = None
+    ) -> tuple[list[str], str, str]:
+        """解析一项 anchor，返回 ``(图列表, 说明用名字, 类型)``；类型见下面的字面量。
+
+        ``max_bytes`` 是这一张的字节预算（多张一起发时按张数分摊）；留空用模块默认值。
+        """
+        limit = MAX_INLINE_BYTES if max_bytes is None else int(max_bytes)
         lowered = name.lower()
         if lowered.startswith(("http://", "https://", "data:")):
             return [name], name, "url"
 
         image = resolve_asset(name, self._session_files, IMAGE_SUFFIXES, self._extra_dirs)
         if image:
-            inlined = image_data_url(image)
+            inlined = image_data_url(image, max_bytes=limit)
             return ([inlined], Path(image).name, "image") if inlined else ([], Path(image).name, "broken")
 
         video = resolve_asset(name, self._session_files, VIDEO_SUFFIXES, self._extra_dirs)
@@ -581,6 +592,14 @@ class GenerateVideoTool(Tool):
                 )
             first = frame
             note = f"（已取上一段 {Path(source).name} 的末帧作为首帧，画面接得上）"
+            if anchor_frames:
+                # 首帧与参考图**互斥**（供应商 400「首尾帧素材与参考素材不能同时使用」）：
+                # 这一段走 keyframe，anchor 给的几张基准图在这一段等于没给。不说的话用户会
+                # 以为是「参考图没生效 / 人物不像」，其实是本段一张都没发出去。
+                note += (
+                    f"（注意：首帧与参考图不能同时用，{len(anchor_frames)} 张基准图在"
+                    "**这一段**不生效；长视频从下一段起才挂上，只出一段则整段都不挂）"
+                )
             if (
                 continuity_mode == CONTINUITY_CHARACTER
                 and wanted > MAX_SEGMENT

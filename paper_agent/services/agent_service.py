@@ -24,7 +24,10 @@ from paper_agent.services.agents import (
     message_text,
 )
 from paper_agent.services import session_artifacts
-from paper_agent.services.video_frames import image_data_url as compact_data_url
+from paper_agent.services.video_frames import (
+    image_data_url as compact_data_url,
+    per_image_budget,
+)
 from paper_agent.services.image_client import (
     IMAGE_MIME,
     ImageClient,
@@ -184,16 +187,26 @@ def _image_data_urls(attachments, limit: int = 5) -> list[str]:
     接口只认图片地址，而桌面端的附件是本地文件，这里直接内联带上（Flash 最多 5 张）。
     没有图片时返回空列表 —— 那就是文生视频 / 文生图。
     大图先压到 1280 宽再内联（手机原图几 MB，原样塞进请求体既慢又容易超限）。
+
+    **几张一起发要分摊体积预算**：各压各的、每张都压到单张上限，叠起来照样撑爆
+    服务端的请求体上限（实测三张人物参考图 → 「Request size limit exceeded」）。
     """
-    urls: list[str] = []
+    from paper_agent.services.video_frames import per_image_budget
+
+    picked: list[Path] = []
     for item in attachments or []:
         path = Path(getattr(item, "path", "") or "")
-        if not path.is_file():
+        if not path.is_file() or path.suffix.lower() not in _IMAGE_MIME:
             continue
-        mime = _IMAGE_MIME.get(path.suffix.lower())
-        if not mime:
-            continue
-        inline = compact_data_url(path)
+        picked.append(path)
+        if len(picked) >= limit:
+            break
+    budget = per_image_budget(len(picked))
+
+    urls: list[str] = []
+    for path in picked:
+        mime = _IMAGE_MIME[path.suffix.lower()]
+        inline = compact_data_url(path, max_bytes=budget)
         if not inline:
             try:
                 raw = path.read_bytes()
@@ -201,8 +214,6 @@ def _image_data_urls(attachments, limit: int = 5) -> list[str]:
                 continue
             inline = f"data:{mime};base64," + base64.b64encode(raw).decode()
         urls.append(inline)
-        if len(urls) >= limit:
-            break
     return urls
 
 
@@ -213,16 +224,26 @@ def build_user_content(
 
     OpenAI 兼容接口要求图片以 ``image_url``（data URI）形式随消息发送，
     只写文件名的话模型是收不到图的。没有可用图片时返回纯字符串。
+
+    **图片必须压过再发**：以前这里用的是 ``image_client.image_data_url``（原样
+    base64，一点不压），三张手机照片（2.8+2.7+3.7 MB）内联后就是 12 MB ——
+    服务端直接回「Request size limit exceeded」，而且这条错发生在**对话请求**上，
+    工具一个都还没调（真实事故：2026-09-28，模型 sensenova-6.8-flash-lite）。
+    现在走压缩版并按张数分摊预算（见 ``video_frames.per_image_budget``）。
     """
     images = [item for item in (attachments or []) if item.is_image]
     if not images:
         return user_text
 
+    budget = per_image_budget(len(images))
     parts: list[dict] = [
         {"type": "text", "text": user_text or "（用户未输入文字，请参考附件）"}
     ]
     for attachment in images:
-        url = image_data_url(attachment.path)
+        # 压不动（多半是没装 ffmpeg）就退回原样内联：图大一点，但总比送不出去强
+        url = compact_data_url(attachment.path, max_bytes=budget) or image_data_url(
+            attachment.path
+        )
         if url:
             parts.append({"type": "image_url", "image_url": {"url": url}})
     return parts if len(parts) > 1 else user_text

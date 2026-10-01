@@ -23,9 +23,47 @@ RATE_LIMIT_MARKERS = (
 )
 
 
-def looks_rate_limited(text: str) -> bool:
-    """错误信息是否属于「限流 / 超额」——这类错误换 Key 或等一会儿重试才有意义。"""
+# 供应商**拒绝请求本身**时的措辞（参数不对 / 字段不支持 / 素材超限）。
+# 这类重试多少次都一样，换 Key 也没用 —— 偏偏它们的文案里常带 exceed / limit / quota
+# （实测：参考图给多了会被拒，原文类似「images exceeds the maximum of N」），
+# 只按关键词匹配就会被当成限流：界面显示「接口限流」、Key 白白冷却 60 秒。
+PARAM_ERROR_MARKERS = (
+    "invalid_request", "invalid request", "invalid_value", "invalid value",
+    "invalid_param", "bad request", "param", "参数", "不支持", "not supported",
+    "unsupported", "exceeds the maximum", "exceed maximum", "exceeds max",
+    "maximum of", "at most", "must be", "should be", "无效", "非法",
+    # 请求体过大：实测三张参考图内联后会撞「Request size limit exceeded」——
+    # 它既不是限流也不是额度，换 Key / 重试都发不出去，只能把图压小
+    "request size", "size limit", "payload", "too large", "entity too large",
+    "请求体", "过大",
+)
+# 错误文案里带的 HTTP 状态码（形如「HTTP 400 · …」）
+HTTP_CODE_RE = re.compile(r"http\s*[^\d]{0,4}(\d{3})")
+# 只有这些码才可能是「忙 / 限流」；其余（400 参数错、401/403 鉴权、404 地址错、
+# 413 请求体过大）重试与换 Key 都救不回来
+BUSY_HTTP_CODES = (429, 500, 502, 503, 504)
+
+
+def looks_parameter_error(text: str) -> bool:
+    """错误是否属于「请求本身不被接受」（参数 / 素材问题），重试没有意义。"""
     lowered = (text or "").lower()
+    return any(marker in lowered for marker in PARAM_ERROR_MARKERS)
+
+
+def looks_rate_limited(text: str) -> bool:
+    """错误信息是否属于「限流 / 超额」——这类错误换 Key 或等一会儿重试才有意义。
+
+    判定顺序：① 有 HTTP 状态码就以码为准（400/401/413 这些一律不算限流，
+    别让「接口限流」的提示盖住真实原因）；② 排除参数 / 素材被拒的措辞；
+    ③ 最后才按限流的关键词猜。
+    """
+    body = text or ""
+    match = HTTP_CODE_RE.search(body.lower())
+    if match and int(match.group(1)) not in BUSY_HTTP_CODES:
+        return False
+    lowered = body.lower()
+    if looks_parameter_error(lowered):
+        return False
     return any(marker in lowered for marker in RATE_LIMIT_MARKERS)
 
 

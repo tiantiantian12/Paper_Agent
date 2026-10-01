@@ -52,6 +52,18 @@ class ComposerEditor(QTextEdit):
     def sizeHint(self) -> QSize:  # noqa: N802
         return QSize(200, self.height())
 
+    # ------------------------------------------------------------------ 光标
+    def _refresh_cursor(self) -> None:
+        """把光标**画**到它真正所在的位置。
+
+        生成视频时界面刷新很密（进度、卡片、面板一轮接一轮），光标那一条窄矩形的
+        重绘会被挤掉 —— 表现为「光标一直停在最后面、也不闪」，但点击 / 按方向键后
+        **输入是落在正确位置的**（说明逻辑光标没问题，只是绘制没跟上）。
+        每次交互后主动请求一次重绘即可。
+        """
+        self.ensureCursorVisible()
+        self.viewport().update(self.cursorRect())
+
     # ------------------------------------------------------------------ 键盘
     def keyPressEvent(self, event):  # noqa: N802
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
@@ -64,6 +76,11 @@ class ComposerEditor(QTextEdit):
                 self.submitted.emit()
                 return
         super().keyPressEvent(event)
+        self._refresh_cursor()
+
+    def mousePressEvent(self, event):  # noqa: N802
+        super().mousePressEvent(event)
+        self._refresh_cursor()
 
     # ------------------------------------------------------------------ 粘贴
     def canInsertFromMimeData(self, source: QMimeData) -> bool:  # noqa: N802

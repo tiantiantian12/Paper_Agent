@@ -35,6 +35,18 @@ SAMPLE_RATIOS = (0.12, 0.5, 0.88)
 # 内联图片的上限：供应商收 data URL 但没必要把 3MB 的原图原样发过去
 MAX_INLINE_BYTES = 900_000
 MAX_INLINE_WIDTH = 1280
+# **多张一起发时还要看总量**：单张 900KB 看着不大，三张 base64 之后就是 3MB+，
+# 服务端直接回「Request size limit exceeded」（真实事故：三张人物参考图，2026-09-28）。
+# base64 会再涨 1/3，所以这里的预算按**编码前**的字节算。
+MAX_INLINE_TOTAL_BYTES = 1_200_000
+MIN_INLINE_BYTES = 200_000          # 分摊后单张的地板：再小就认不出人了
+# 压缩档位（宽, ffmpeg -q:v）：逐级降，取第一个塞进预算的
+COMPRESS_STEPS = ((1280, 3), (1024, 6), (768, 10), (640, 16))
+
+
+def per_image_budget(count: int) -> int:
+    """``count`` 张图一起发时，单张能占多少字节（总量分摊，有下限）。"""
+    return max(MIN_INLINE_BYTES, MAX_INLINE_TOTAL_BYTES // max(1, int(count or 1)))
 MIME_BY_SUFFIX = {
     ".png": "image/png",
     ".jpg": "image/jpeg",
@@ -183,13 +195,18 @@ def last_frame_data_url(video_path: str | Path, timeout: float = DEFAULT_TIMEOUT
     return _data_url(raw, "image/jpeg") if raw else ""
 
 
-def image_data_url(path: str | Path) -> str:
+def image_data_url(path: str | Path, max_bytes: int | None = None) -> str:
     """把本地图片读成 ``data:`` 地址；太大就先压到能发出去的大小。
 
     供应商对本地路径是直接回 400 的（「素材必须是公网 http(s) URL 或 Base64，
     不支持本地文件路径」），所以给它的图必须是我们自己内联好的。
     读不出来返回空串。
+
+    ``max_bytes`` 是**这一张**的预算 —— 一次发好几张参考图时要按张数分摊
+    （见 :func:`per_image_budget`），否则总量会撑爆服务端的请求体上限。
+    留空表示用模块里的 ``MAX_INLINE_BYTES``（**运行时**取，测试才改得动）。
     """
+    limit = MAX_INLINE_BYTES if max_bytes is None else int(max_bytes)
     target = Path(str(path or ""))
     if not target.is_file():
         return ""
@@ -198,9 +215,9 @@ def image_data_url(path: str | Path) -> str:
         raw = target.read_bytes()
     except OSError:
         return ""
-    if raw and len(raw) <= MAX_INLINE_BYTES and suffix in MIME_BY_SUFFIX:
+    if raw and len(raw) <= limit and suffix in MIME_BY_SUFFIX:
         return _data_url(raw, MIME_BY_SUFFIX[suffix])
-    packed = _compress_image(target)
+    packed = _compress_image(target, max_bytes=limit)
     if packed:
         return _data_url(packed, "image/jpeg")
     # 压不动（多数是这台机器没装 ffmpeg）：原样内联总比「传了照片却送不出去」强，
@@ -210,29 +227,40 @@ def image_data_url(path: str | Path) -> str:
     return ""
 
 
-def _compress_image(path: Path) -> bytes:
-    """用 ffmpeg 把图片转成不太大的 JPEG（超过 1280 宽会等比缩小）。"""
+def _compress_image(path: Path, max_bytes: int) -> bytes:
+    """用 ffmpeg 把图片压进 ``max_bytes``：逐级缩小尺寸与质量，取第一个塞得下的。
+
+    只压一档不够用：原图够大时 1280 宽 / q3 出来仍有几百 KB，几张叠起来就爆了。
+    """
     exe = ffmpeg_exe()
     if not exe:
         return b""
     workdir = Path(tempfile.mkdtemp(prefix="pa-image-"))
     try:
-        out = workdir / "packed.jpg"
-        try:
-            run_ffmpeg(
-                [
-                    exe, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-                    "-i", str(path),
-                    # 逗号在滤镜里要转义，否则会被当成「下一个滤镜」
-                    "-vf", rf"scale='min({MAX_INLINE_WIDTH}\,iw)':-2",
-                    "-frames:v", "1", "-q:v", str(FRAME_QUALITY),
-                    str(out),
-                ],
-                timeout=30.0,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return b""
-        return out.read_bytes() if out.is_file() else b""
+        best = b""
+        for width, quality in COMPRESS_STEPS:
+            out = workdir / f"packed-{width}.jpg"
+            try:
+                run_ffmpeg(
+                    [
+                        exe, "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+                        "-i", str(path),
+                        # 逗号在滤镜里要转义，否则会被当成「下一个滤镜」
+                        "-vf", rf"scale='min({width}\,iw)':-2",
+                        "-frames:v", "1", "-q:v", str(quality),
+                        str(out),
+                    ],
+                    timeout=30.0,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue
+            data = out.read_bytes() if out.is_file() else b""
+            if not data:
+                continue
+            best = data
+            if len(data) <= max_bytes:
+                return data
+        return best          # 都塞不下就用最后一档（最小）
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
 

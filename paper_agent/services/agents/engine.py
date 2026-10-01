@@ -18,11 +18,11 @@ import re
 import threading
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Sequence
 
 from paper_agent.services import session_artifacts
 from paper_agent.services.key_pool import looks_rate_limited
-from paper_agent.services.skills.base import ToolRegistry
+from paper_agent.services.skills.base import ToolRegistry, ToolResult
 from paper_agent.services.stream_draft import DraftExtractor
 from paper_agent.services.skills.document_skills import (
     _content_name,
@@ -233,6 +233,62 @@ def observation_text(name: str, text: str, seq: int) -> str:
         "不要据此认为又来了新图 / 新文件；刚做过的事不要再做一遍）\n"
         + str(text or "")
     )
+
+
+# ---------------------------------------------------------------- 产出事实回灌
+# 工具返回里**本来就写着**生成了什么，但那只对发出这次调用的那一步有效：之后模型靠的是
+# 上下文里那段文字自己的记忆，隔几轮就退化成「记得好像失败过」/「记得好像成功过」——
+# 于是两个方向同时出错：没生成却说生成了、生成了却以为没生成而去重拍。
+# 所以**每次**都把本轮此刻磁盘上真实存在的产物再陈述一遍，成本几乎为零。
+#
+# 只对「昂贵、且容易被重复调用」的工具附加（下面的映射表），别污染全文上下文。
+FACT_TOOLS: dict[str, tuple[set[str], str]] = {
+    "generate_video": (VIDEO_SUFFIXES, "视频"),
+    "merge_videos": (VIDEO_SUFFIXES, "视频"),
+    "generate_image": (IMAGE_SUFFIXES, "图片"),
+}
+
+
+def artifact_fact(name: str, produced: Sequence[tuple[str, str]]) -> str:
+    """给工具观察补一段「本轮此刻真实产出」的事实清单。
+
+    Args:
+        name: 刚执行完的工具名（不在 :data:`FACT_TOOLS` 里就返回空串）。
+        produced: 本轮**磁盘上真实存在**的产物，形如 ``[(名称, 路径)]``。
+
+    两个方向一起收口：有产出时点名文件、堵住「以为没生成而重拍」；
+    零产出时挑明「没有」，堵住「照抄历史格式虚报完成」。
+    """
+    spec = FACT_TOOLS.get(name)
+    if spec is None:
+        return ""
+    suffixes, label = spec
+    real = list(
+        dict.fromkeys(
+            Path(path).name
+            for _item, path in produced
+            if path and Path(path).suffix.lower() in suffixes
+        )
+    )
+    if real:
+        return (
+            f"\n\n【本轮产出事实 · 截至刚才这次调用】本轮**已经真的产出** {len(real)} 个"
+            f"{label}文件：{'、'.join(real)}。\n"
+            "这些**不要、也不需要再生成一遍**（重生成只会多等一两分钟、白花一份额度，"
+            f"结果还是一样）；要在它们之上继续，用 continue_from / anchor / merge_videos，"
+            "或从下面列出的表里照抄真实文件名。"
+        )
+    return (
+        f"\n\n【本轮产出事实 · 截至刚才这次调用】本轮**还没有产出任何{label}文件**。\n"
+        f"不要说「已生成 / 已合成 / 已完成」，也不要给出任何{label}文件名"
+        "（名字里带生成时刻，你不可能预知）；真的去做 —— 调用工具，或如实说明做不到。"
+    )
+
+
+# 昂贵且**非幂等**、同时又是小模型最爱重复调用的工具：同样的参数再跑一次只会多花一份
+# 额度（视频还多等一两分钟），结果却和上次一样。光靠提示里那句「不要重拍」只是求它守
+# 规矩，这里是硬闸 —— 不管它怎么想，都不再真的跑第二遍。
+NON_IDEMPOTENT_TOOLS = {"generate_video", "generate_image"}
 
 
 def missing_names(text: str, name_re: Any) -> list[str]:
@@ -479,6 +535,8 @@ class AgentOrchestrator:
         """作为 worker 的 producer 执行（签名与 ``_StreamWorker`` 一致）。"""
         self._emit = emit
         self._produced = []          # 本轮真正产出的文件：(名称, 路径)
+        # 本轮已成功的昂贵调用，按「工具名 + 参数指纹」存档，用来跳过重复调用
+        self._call_cache: dict[str, dict] = {}
         self._degenerate_round = False   # 上一轮是否因重复输出被中止
         temperature = self.EFFORT_TEMPERATURES.get(self._effort, 0.7)
         return self._execute(temperature)
@@ -594,6 +652,56 @@ class AgentOrchestrator:
             for item in getattr(self, "_produced", [])
             if Path(item[1]).suffix.lower() in suffixes
         ]
+
+    # ---------------------------------------------------------------- 重复调用去重
+    def _call_fingerprint(self, name: str, args: Any) -> str:
+        """调用指纹：工具名 + 归一化后的参数（按 key 排序，忽略书写顺序差异）。"""
+        try:
+            payload = json.dumps(args, sort_keys=True, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):      # pragma: no cover - 参数不可序列化时的兜底
+            payload = str(sorted((str(k), str(v)) for k, v in (args or {}).items()))
+        return f"{name}:{payload}"
+
+    def _cached_call(self, name: str, args: Any) -> dict | None:
+        """本轮**同名同参且已成功**的那次调用 ``{"seq", "result"}``；没有就 None。
+
+        只缓存成功的：失败值得重试 —— 接口抖动、参数微调后的再试都不该被上一次的
+        报错挡住。
+        """
+        if name not in NON_IDEMPOTENT_TOOLS:
+            return None
+        cache = getattr(self, "_call_cache", None)
+        if not cache:
+            return None
+        entry = cache.get(self._call_fingerprint(name, args))
+        return entry if isinstance(entry, dict) else None
+
+    def _remember_call(self, name: str, args: Any, result: Any, seq: int) -> None:
+        """记下这次成功调用，留给可能的重复调用复用（失败不记）。"""
+        if name not in NON_IDEMPOTENT_TOOLS or not getattr(result, "success", False):
+            return
+        cache = getattr(self, "_call_cache", None)
+        if cache is None:
+            cache = self._call_cache = {}
+        cache.setdefault(self._call_fingerprint(name, args), {"seq": seq, "result": result})
+
+    @staticmethod
+    def _replayed_result(name: str, entry: dict) -> ToolResult:
+        """重复调用的返回：交代「没真的再生成」，并把上次的原文原样给它。"""
+        cached = entry.get("result")
+        origin = int(entry.get("seq") or 0)
+        return ToolResult(
+            content=(
+                f"【重复调用已跳过】这次的参数与本轮第 {origin} 次 {name} 调用完全一致，"
+                "那次已经成功 —— **这次没有真的再生成任何东西**（重复生成只会多等一两分钟、"
+                "白花一份额度，出来的片子也还是那一条）。\n"
+                "请直接沿用那次的结果：照实告诉用户片子已经生成好了即可，"
+                "**不要再发起第三次同样的调用**。确实还缺别的镜头时，改的是内容参数"
+                "（不同的画面 / 更大的 seconds），那样才是新的一次生成。\n\n"
+                f"第 {origin} 次调用的返回原文：\n{cached.for_model()}"
+            ),
+            artifact_paths=list(getattr(cached, "artifact_paths", ())),
+        )
 
     def _verify_image_claim(
         self,
@@ -1112,7 +1220,38 @@ class AgentOrchestrator:
                             "role": "tool",
                             "tool_call_id": call.get("id", ""),
                             "name": name,
-                            "content": observation_text(name, message, self._tool_seq),
+                            # 工具压根没跑：更要挑明「本轮还没有产出」，否则它照着
+                            # 完成模板收尾成「已生成」的概率很高
+                            "content": observation_text(name, message, self._tool_seq)
+                            + artifact_fact(name, self._produced),
+                        }
+                    )
+                    continue
+
+                # 同样的参数本轮已经成功过 → 直接把上次的返回交给它，**不真的再跑一遍**。
+                # 这是「生成了却以为没生成、又重生成一遍」的最后一道硬闸：提示再怎么措辞
+                # 也只是求模型守规矩，这里不管它怎么想，都不花那一份额度。
+                entry = self._cached_call(name, args)
+                if entry is not None:
+                    result = self._replayed_result(name, entry)
+                    self._emit(
+                        TOOL,
+                        json.dumps(
+                            {
+                                "name": name,
+                                "args": raw_args,
+                                "result": result.for_model()[:600],
+                                "status": "done",
+                            },
+                            ensure_ascii=False,
+                        ),
+                    )
+                    working.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": call.get("id", ""),
+                            "name": name,
+                            "content": observation_text(name, result.for_model(), self._tool_seq),
                         }
                     )
                     continue
@@ -1150,6 +1289,7 @@ class AgentOrchestrator:
                         # 收工：后台服务的读取线程还会活着，回调必须撤掉
                         tool.set_output_hook(None)
                         tool.set_artifact_hook(None)
+                self._remember_call(name, args, result, self._tool_seq)
                 payload = {
                     "name": name,
                     "args": raw_args,
@@ -1178,7 +1318,10 @@ class AgentOrchestrator:
                         "role": "tool",
                         "tool_call_id": call.get("id", ""),
                         "name": name,
-                        "content": observation_text(name, result.for_model(), self._tool_seq),
+                        # 事实清单独有一层（见 artifact_fact）：本轮此刻磁盘上真的有/没有，
+                        # 由程序说了算，不让它凭记忆去猜
+                        "content": observation_text(name, result.for_model(), self._tool_seq)
+                        + artifact_fact(name, self._produced),
                     }
                 )
 
