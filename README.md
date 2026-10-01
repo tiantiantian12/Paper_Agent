@@ -314,6 +314,35 @@ run.py             一键启动两个端口
 | `user_keys` | 用户代理密钥，含状态、有效期、允许的模型、最近使用时间 |
 | `request_logs` | 请求日志（谁 / 什么时候 / 打了什么 / 结果），按 IP 与时间建索引，见「请求日志」一节 |
 
+## 落地页与客户端下载
+
+服务端 **8000 端口**同时托管了一个落地页（访问 `/` 即首页），用于**介绍客户端并提供 exe 下载**：
+
+| 路由 | 说明 |
+| --- | --- |
+| `GET /` | 落地页（功能介绍 + 下载按钮），静态资源在 `app/web/site/` |
+| `GET /download` | 下载 `config.json` 指定的 exe（默认 `data/downloads/Paper_Agent.exe`） |
+| `GET /api/site/info` | 落地页用的元信息（版本号、`download_ready` 标志） |
+
+安装包到位前，`/download` 返回 404 提示，落地页按钮自动置灰。
+
+### 准备安装包
+
+桌面端是 PySide6 应用，用 `Paper_Agent/build_exe.py`（或 `build.bat`）打包：
+
+```bash
+cd Paper_Agent
+pip install -r requirements.txt pyinstaller
+python build_exe.py                       # 产物 dist/Paper_Agent.exe
+copy dist\Paper_Agent.exe ..\Paper_Agent_Server\data\downloads\Paper_Agent.exe
+```
+
+文件名不同就改 `config.json` 的 `exe_name`；下载目录用 `download_dir` 改。
+
+### 本机运行并暴露到公网
+
+见 `deploy/LOCAL.md`（含 Cloudflare Tunnel / Tailscale 两种免域名方案）。
+
 ## 安全说明
 
 - 登录校验只用 PBKDF2-HMAC-SHA256 哈希，数据库中另存一份明文副本**仅供看板展示**。

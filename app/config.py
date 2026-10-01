@@ -75,6 +75,15 @@ if not DATA_DIR.is_absolute():
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "paper_agent.db"
 
+# ------------------------------------------------------------------ 下载
+# 桌面端 exe 的存放目录：落地页「下载」按钮从这里取文件
+DOWNLOAD_DIR = Path(_text("DOWNLOAD_DIR", "download_dir", "data/downloads"))
+if not DOWNLOAD_DIR.is_absolute():
+    DOWNLOAD_DIR = BASE_DIR / DOWNLOAD_DIR
+DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+# 下载文件名（区分 Windows 安装包 / 压缩包；改 config.json 的 exe_name 即可）
+EXE_NAME = _text("EXE_NAME", "exe_name", "Paper_Agent.exe")
+
 # ------------------------------------------------------------------ 端口
 # 主服务端口：桌面端（Paper_Agent）注册 / 登录 / 验证码都走这里
 API_HOST = _text("API_HOST", "api_host", "0.0.0.0")

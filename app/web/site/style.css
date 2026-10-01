@@ -1,0 +1,150 @@
+:root {
+  --bg: #0b0f1a;
+  --bg-soft: #121829;
+  --card: #161d33;
+  --border: #243049;
+  --text: #e8ecf5;
+  --muted: #97a3bd;
+  --accent: #6ea8fe;
+  --accent-2: #9b8cff;
+  --primary: #4f7cff;
+  --primary-hover: #3d68e8;
+  --radius: 16px;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  line-height: 1.6;
+}
+
+a { color: inherit; text-decoration: none; }
+
+/* ---------- 导航 ---------- */
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 32px;
+  max-width: 1080px;
+  margin: 0 auto;
+}
+.brand { display: flex; align-items: center; gap: 10px; }
+.logo {
+  display: grid;
+  place-items: center;
+  width: 34px; height: 34px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  color: #0b0f1a; font-weight: 800; font-size: 14px;
+}
+.brand-name { font-weight: 700; letter-spacing: .3px; }
+.nav-links { display: flex; gap: 22px; }
+.nav-links a { color: var(--muted); font-size: 14px; }
+.nav-links a:hover { color: var(--text); }
+
+/* ---------- 主体 ---------- */
+main { max-width: 1080px; margin: 0 auto; padding: 0 32px 64px; }
+
+.hero { text-align: center; padding: 72px 0 56px; }
+.badge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 22px;
+}
+.hero h1 {
+  font-size: 52px;
+  line-height: 1.15;
+  margin: 0 0 18px;
+  font-weight: 800;
+  letter-spacing: -.5px;
+}
+.grad {
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+.lead {
+  max-width: 640px;
+  margin: 0 auto 28px;
+  color: var(--muted);
+  font-size: 17px;
+}
+.cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+.req { margin-top: 16px; color: var(--muted); font-size: 13px; }
+
+.btn {
+  display: inline-block;
+  padding: 11px 22px;
+  border-radius: 11px;
+  font-weight: 600;
+  font-size: 15px;
+  transition: transform .08s ease, background .15s ease, opacity .15s ease;
+}
+.btn:active { transform: translateY(1px); }
+.btn-primary { background: var(--primary); color: #fff; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-ghost { border: 1px solid var(--border); color: var(--text); }
+.btn-ghost:hover { border-color: var(--accent); }
+.btn-lg { padding: 14px 30px; font-size: 17px; }
+.btn.disabled { opacity: .5; pointer-events: none; }
+
+/* ---------- 功能卡片 ---------- */
+.features {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 18px;
+  margin: 24px 0 64px;
+}
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  transition: border-color .15s ease, transform .15s ease;
+}
+.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.ico { font-size: 26px; margin-bottom: 10px; }
+.card h3 { margin: 0 0 8px; font-size: 17px; }
+.card p { margin: 0; color: var(--muted); font-size: 14px; }
+
+/* ---------- 下载 ---------- */
+.download { text-align: center; padding: 40px 0 56px; }
+.download h2 { font-size: 32px; margin: 0 0 8px; }
+.download-sub { color: var(--muted); margin: 0 0 24px; }
+
+/* ---------- FAQ ---------- */
+.faq { background: var(--bg-soft); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 28px 32px; }
+.faq h2 { font-size: 26px; margin: 0 0 16px; }
+.faq ul { margin: 0; padding-left: 20px; color: var(--muted); }
+.faq li { margin-bottom: 12px; }
+.faq code {
+  background: #0b0f1a; border: 1px solid var(--border);
+  padding: 1px 6px; border-radius: 6px; color: var(--accent);
+  font-size: 13px;
+}
+
+/* ---------- 页脚 ---------- */
+.footer {
+  max-width: 1080px; margin: 0 auto; padding: 28px 32px 48px;
+  display: flex; justify-content: space-between; align-items: center;
+  color: var(--text); font-size: 13px;
+  border-top: 1px solid var(--border);
+}
+.muted { color: var(--muted); }
+
+@media (max-width: 860px) {
+  .features { grid-template-columns: 1fr; }
+  .hero h1 { font-size: 38px; }
+}

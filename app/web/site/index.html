@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Paper Agent · 毕业论文写作智能体桌面端</title>
+  <link rel="stylesheet" href="/site-static/style.css" />
+</head>
+<body>
+  <header class="nav">
+    <div class="brand">
+      <span class="logo">PA</span>
+      <span class="brand-name">Paper Agent</span>
+    </div>
+    <nav class="nav-links">
+      <a href="#features">功能</a>
+      <a href="#download">下载</a>
+      <a href="#faq">说明</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="hero">
+      <span class="badge" id="version-badge">v0.1.0</span>
+      <h1>毕业论文写作智能体<br /><span class="grad">桌面端</span></h1>
+      <p class="lead">
+        把论文写作的每一步交给智能体：对话构思、大纲生成、长文续写，
+        还能直接产出 Word / PPT / PDF / Excel，文生图与视频生成也一并搞定。
+      </p>
+      <div class="cta">
+        <a class="btn btn-primary" id="download-btn" href="/download">下载客户端</a>
+        <a class="btn btn-ghost" href="#features">了解更多</a>
+      </div>
+      <p class="req" id="req-note">支持 Windows 10/11 · 需要联网并填写服务端地址</p>
+    </section>
+
+    <section id="features" class="features">
+      <article class="card">
+        <div class="ico">✍️</div>
+        <h3>论文写作智能体</h3>
+        <p>AI 对话式构思、章节大纲、长文续写与改写，思路卡住时随时追问。</p>
+      </article>
+      <article class="card">
+        <div class="ico">📄</div>
+        <h3>文档一键生成</h3>
+        <p>内置 Word / PPT / PDF / Excel 读写与产物生成能力，把草稿直接落成规范文档。</p>
+      </article>
+      <article class="card">
+        <div class="ico">🖼️</div>
+        <h3>文生图</h3>
+        <p>内置模型走服务端代理，供应商密钥只在服务端留存，永远不会下发到你的电脑。</p>
+      </article>
+      <article class="card">
+        <div class="ico">🎬</div>
+        <h3>视频生成</h3>
+        <p>支持运镜、分镜时间线等生成技能，把脚本变成可播放的视频片段。</p>
+      </article>
+      <article class="card">
+        <div class="ico">🔑</div>
+        <h3>账号与密钥托管</h3>
+        <p>邮箱验证码注册登录，登录后自动取回一把「用户密钥」，调用内置模型只需它。</p>
+      </article>
+      <article class="card">
+        <div class="ico">🖥️</div>
+        <h3>本地优先</h3>
+        <p>PySide6 桌面端，会话与产物在你本地，想导出随时导出，不上传也能用自定义模型。</p>
+      </article>
+    </section>
+
+    <section id="download" class="download">
+      <h2>下载客户端</h2>
+      <p class="download-sub">下载后双击安装，首次登录时填写服务端地址即可使用内置模型。</p>
+      <a class="btn btn-primary btn-lg" id="download-btn-2" href="/download">下载 Paper_Agent.exe</a>
+      <p class="req" id="download-state">正在检查安装包…</p>
+    </section>
+
+    <section id="faq" class="faq">
+      <h2>使用说明</h2>
+      <ul>
+        <li><b>内置模型需要服务端。</b> 客户端本身不含大模型密钥，内置模型通过你（或运营方）部署的 Paper_Agent_Server 代理调用。</li>
+        <li><b>登录页填写「服务地址」。</b> 例如运营方提供的 <code>https://xxx.trycloudflare.com</code> 或 <code>http://IP:8000</code>，首次注册用邮箱收验证码。</li>
+        <li><b>自定义模型不依赖服务端。</b> 在设置里填自己的 OpenAI 兼容 Key 与地址，可完全离线使用。</li>
+        <li><b>系统要求。</b> Windows 10 / 11（64 位）；联网；建议 8GB 以上内存。</li>
+      </ul>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Paper Agent · 毕业论文写作智能体</span>
+    <span class="muted">本页由 Paper_Agent_Server 提供</span>
+  </footer>
+
+  <script src="/site-static/app.js"></script>
+</body>
+</html>
